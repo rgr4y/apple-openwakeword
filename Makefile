@@ -3,7 +3,7 @@ RELEASE := .build/release/AppleSTT
 DEBUG   := .build/debug/AppleSTT
 PREFIX  := /usr/local/bin
 
-.PHONY: build release run run-debug run-local-mic run-oww-local oww-local tts-local run-all install uninstall clean
+.PHONY: build release run run-debug run-local-mic run-oww-local oww-local tts-local run-all run-ha install uninstall clean
 
 ## Default: debug build
 build:
@@ -37,11 +37,20 @@ tts-local:
 run-oww-local: release
 	$(RELEASE) --local-mic | jq --unbuffered -c .
 
-## Run all three servers together (OWW + TTS + STT) via Honcho
+## Run all three servers — LOCAL mode (Mac orchestrates: wake→STT→LLM/HA→say)
+## Requires oww.host set in config.json. Fast, fewest round trips.
 run-all: release
 	@command -v .oww-venv/bin/honcho >/dev/null 2>&1 || \
 		(./scripts/run-oww-local.sh --setup-only && .oww-venv/bin/pip install --quiet honcho)
 	.oww-venv/bin/honcho start
+
+## Run all three servers — HA mode (HA orchestrates the full pipeline)
+## Mac exposes OWW (10400), STT (10300), TTS (10200) as Wyoming services.
+## Register them in HA: Settings → Voice Assistants → configure all four.
+run-ha: release
+	@command -v .oww-venv/bin/honcho >/dev/null 2>&1 || \
+		(./scripts/run-oww-local.sh --setup-only && .oww-venv/bin/pip install --quiet honcho)
+	.oww-venv/bin/honcho start -f Procfile.ha
 
 ## Install to /usr/local/bin (or PREFIX=...)
 install: release

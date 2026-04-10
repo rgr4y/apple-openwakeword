@@ -56,6 +56,35 @@ Double-fire protection prevents a second wake event from interrupting an active 
 - Python 3.10+ (for openWakeWord server and optional TTS server)
 - For local mic: microphone permission (System Settings → Privacy & Security → Microphone)
 
+## Two modes
+
+### Local-orchestrated (default) — `make run-all`
+
+The Mac drives the full pipeline. Lowest latency, fewest round trips.
+
+```
+Mic → OWW (local) → Apple STT → LLM or HA API → say (local TTS)
+```
+
+- Wake word fires locally → STT window opens immediately
+- Transcript goes to your LLM or HA's conversation API
+- Response spoken via macOS `say` — no network TTS round trip
+- Requires `oww.host` and `ha` (or `llm`) set in `config.json`
+
+### HA-orchestrated — `make run-ha`
+
+The Mac exposes three Wyoming services; Home Assistant drives everything.
+
+```
+HA Pipeline: OWW server (10400) → STT server (10300) → Gemini/LLM → TTS server (10200)
+```
+
+- HA streams audio to OWW, handles wake detection, calls STT, calls conversation agent, calls TTS
+- Mac is just a dumb provider of those three services
+- Configure in HA: **Settings → Voice Assistants → [your assistant]** — set Wake Word, STT, Conversation Agent, TTS to point at your Mac
+
+Switch between them by running `make run-all` vs `make run-ha`. Both start the same three servers; the only difference is whether the Swift daemon runs with `--local-mic` (local mode) or as a plain Wyoming STT server (HA mode).
+
 ## Quick start
 
 ```bash
@@ -64,18 +93,13 @@ swift build -c release
 
 # 2. Copy config
 cp config.json.example config.json
-# Edit config.json — set ha.host, ha.token, llm settings, etc.
+# Edit config.json — set ha.host, ha.token, ha.agentId, oww.host, etc.
 
-# 3. Run everything (OWW + TTS + STT) via Honcho
+# 3a. Local-orchestrated mode (Mac drives everything)
 make run-all
-```
 
-Or run components individually:
-
-```bash
-make oww-local   # terminal 1 — openWakeWord server
-make tts-local   # terminal 2 — Wyoming TTS (optional)
-make run         # terminal 3 — STT daemon
+# 3b. HA-orchestrated mode (HA drives everything, Mac provides services)
+make run-ha
 ```
 
 ## Configuration (`config.json`)
