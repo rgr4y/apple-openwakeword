@@ -1,9 +1,11 @@
 // AVAudioEngine-based microphone capture.
-// Captures from the default input device, resamples to 16 kHz mono Float32,
-// and calls the sample handler on every chunk.
+// Captures from the default input device (or a pinned device), resamples to
+// 16 kHz mono Float32, and calls the sample handler on every chunk.
 // Re-entrant: call restart() when the device changes.
 
+import AudioToolbox   // kAudioOutputUnitProperty_CurrentDevice
 import AVFoundation
+import CoreAudio      // AudioDeviceID
 import Foundation
 
 final class MicCapture {
@@ -13,8 +15,15 @@ final class MicCapture {
     private(set) var isRunning = false
     private let onSamples: SampleHandler
     private let targetSampleRate: Double = 16_000.0
+    /// When non-nil, pins the engine to this specific CoreAudio device instead of
+    /// the system default.
+    let deviceID: AudioDeviceID?
+    /// Human-readable label used in log messages.
+    let deviceLabel: String
 
-    init(onSamples: @escaping SampleHandler) {
+    init(deviceID: AudioDeviceID? = nil, label: String = "default", onSamples: @escaping SampleHandler) {
+        self.deviceID = deviceID
+        self.deviceLabel = label
         self.onSamples = onSamples
     }
 
@@ -26,6 +35,24 @@ final class MicCapture {
         engine = eng
 
         let node = eng.inputNode
+
+        // Pin to a specific device if requested (macOS only).
+        // Must be done before installing the tap / starting the engine.
+        if let devID = deviceID, let au = node.audioUnit {
+            var id = devID
+            let status = AudioUnitSetProperty(
+                au,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global,
+                0,
+                &id,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            if status != noErr {
+                log("MicCapture[\(deviceLabel)]: failed to pin device id=\(devID), OSStatus=\(status)")
+            }
+        }
+
         let tapFormat = node.outputFormat(forBus: 0)
 
         guard tapFormat.sampleRate > 0, tapFormat.channelCount > 0 else {
@@ -43,7 +70,7 @@ final class MicCapture {
 
         try eng.start()
         isRunning = true
-        log("MicCapture: started (\(tapFormat.sampleRate)Hz \(tapFormat.channelCount)ch → 16kHz mono)")
+        log("MicCapture[\(deviceLabel)]: started (\(tapFormat.sampleRate)Hz \(tapFormat.channelCount)ch → 16kHz mono)")
     }
 
     func stop() {
@@ -52,11 +79,11 @@ final class MicCapture {
         engine?.stop()
         engine = nil
         isRunning = false
-        log("MicCapture: stopped")
+        log("MicCapture[\(deviceLabel)]: stopped")
     }
 
     func restart() throws {
-        log("MicCapture: restarting (device change)")
+        log("MicCapture[\(deviceLabel)]: restarting (device change)")
         stop()
         try start()
     }
@@ -115,16 +142,52 @@ enum CaptureError: Error, CustomStringConvertible {
 
 // MARK: - Permission helper
 
-func requestMicrophoneAccess() async -> Bool {
-    let status = AVCaptureDevice.authorizationStatus(for: .audio)
-    switch status {
-    case .authorized: return true
-    case .notDetermined:
-        return await withCheckedContinuation { cont in
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                cont.resume(returning: granted)
+/// Requests microphone access, then polls every 2 seconds in case the user
+/// grants it via System Settings. Gives up after `maxRetries` polls and exits.
+func ensureMicrophoneAccess(maxRetries: Int = 3) async {
+    // First, trigger the system request dialog (works if notDetermined)
+    let initial = AVCaptureDevice.authorizationStatus(for: .audio)
+
+    if initial == .notDetermined {
+        let granted = await withCheckedContinuation { cont in
+            AVCaptureDevice.requestAccess(for: .audio) { cont.resume(returning: $0) }
+        }
+        if granted {
+            log("Microphone access granted")
+            return
+        }
+        // Prompt shown but denied — fall through to retry loop
+    } else if initial == .authorized {
+        log("Microphone access already granted")
+        return
+    }
+
+    // Status is denied or restricted. Print instructions and poll.
+    log("Microphone access not granted (status=\(initial.rawValue))")
+    log("→ Open: System Settings → Privacy & Security → Microphone → enable for Terminal/iTerm2")
+
+    for attempt in 1...maxRetries {
+        log("Waiting 2s… (check \(attempt)/\(maxRetries))")
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        if status == .authorized {
+            log("Microphone access granted")
+            return
+        }
+        if status == .notDetermined {
+            // Try requesting again (happens after a TCC DB reset)
+            let granted = await withCheckedContinuation { cont in
+                AVCaptureDevice.requestAccess(for: .audio) { cont.resume(returning: $0) }
+            }
+            if granted {
+                log("Microphone access granted")
+                return
             }
         }
-    default: return false
+        log("Still not granted (status=\(status.rawValue))")
     }
+
+    log("ERROR: microphone access denied after \(maxRetries) retries. Exiting.")
+    exit(1)
 }

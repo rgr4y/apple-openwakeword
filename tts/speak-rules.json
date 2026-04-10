@@ -1,0 +1,245 @@
+[
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "Inline code (backtick wrapped) — strip backticks, keep content",
+    "pattern": "`([^`]+)`",
+    "replacement": " \\1 "
+  },
+  {
+    "type": "replace",
+    "enabled": true,
+    "description": "Bare backtick — strip completely",
+    "find": "`",
+    "replacement": ""
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "Strip all quote characters (single, double, smart)",
+    "pattern": "[\"'\\u201c\\u201d\\u2018\\u2019]",
+    "replacement": ""
+  },
+  {
+    "_comment": "--- Strip rules ---",
+    "type": "strip_re",
+    "enabled": true,
+    "description": "UUIDs and GUIDs",
+    "pattern": "\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b"
+  },
+  {
+    "type": "strip_re",
+    "enabled": true,
+    "description": "Hex strings (6+ hex chars, looks like a hash/id)",
+    "pattern": "\\b[0-9a-f]{8,}\\b"
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "NVMe device paths (/dev/nvme0n1p2 etc) -> N V M E, 0 N, blah blah",
+    "pattern": "/dev/nvme([0-9]+)(n[0-9]*)?(?:p[0-9]+)?",
+    "replacement": "N V M E, \\1 N, blah blah"
+  },
+  {
+    "type": "munge_path",
+    "enabled": true,
+    "description": "File paths — spoken as words with 'dot' for extensions",
+    "pattern": "(?:~|\\/[\\w.\\-]+){2,}[\\w./\\-]*"
+  },
+  {
+    "type": "strip_re",
+    "enabled": true,
+    "description": "URLs",
+    "pattern": "https?://\\S+"
+  },
+  {
+    "type": "strip_re",
+    "enabled": true,
+    "description": "Markdown code blocks",
+    "pattern": "```[\\s\\S]*?```"
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "Markdown bold/italic markers — keep content",
+    "pattern": "[*_]{1,3}(.*?)[*_]{1,3}",
+    "replacement": "\\1"
+  },
+  {
+    "_comment": "--- Spell-out rules ---",
+    "type": "spell_out",
+    "enabled": true,
+    "description": "npm -> N P M",
+    "word": "npm",
+    "spoken": "N P M"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "api -> A P I",
+    "word": "api",
+    "spoken": "A P I"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "cli -> C L I",
+    "word": "cli",
+    "spoken": "C L I"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "tts -> T T S",
+    "word": "tts",
+    "spoken": "T T S"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "json -> jason",
+    "word": "json",
+    "spoken": "jason"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "jsonl -> jason-el",
+    "word": "jsonl",
+    "spoken": "jason-el"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "ssh -> S S H",
+    "word": "ssh",
+    "spoken": "S S H"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "php -> P H P",
+    "word": "php",
+    "spoken": "P H P"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "sql -> S Q L",
+    "word": "sql",
+    "spoken": "S Q L"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "css -> C S S",
+    "word": "css",
+    "spoken": "C S S"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "html -> H T M L",
+    "word": "html",
+    "spoken": "H T M L"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "url -> U R L",
+    "word": "url",
+    "spoken": "U R L"
+  },
+  {
+    "_comment": "--- Replace rules ---",
+    "type": "replace_re",
+    "enabled": true,
+    "description": "dirs -> directories",
+    "pattern": "\\bdirs\\b",
+    "replacement": "directories"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "NVRAM -> NV RAM",
+    "word": "nvram",
+    "spoken": "NV RAM"
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "pflash -> pee flash",
+    "pattern": "(?i)\\bpflash[0-9]*\\b",
+    "replacement": "pee flash"
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "NVMe/NVME/nvme -> N V M E",
+    "pattern": "(?i)\\bnvme\\b",
+    "replacement": "N V M E"
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "nginx (any case) -> engine-x",
+    "pattern": "(?i)\\bnginx\\b",
+    "replacement": "engine-x"
+  },
+  {
+    "type": "replace",
+    "enabled": true,
+    "description": "rsync -> r-sync",
+    "find": "rsync",
+    "replacement": "r-sync"
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "circleci -> circle C I",
+    "pattern": "(?i)circleci",
+    "replacement": "circle C I"
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "Strip markdown headers (# ## ###)",
+    "pattern": "^#{1,6}\\s+",
+    "replacement": ""
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "Numbered list markers -> pause",
+    "pattern": "^\\d+\\.\\s+",
+    "replacement": ""
+  },
+  {
+    "type": "replace_re",
+    "enabled": true,
+    "description": "gcloud",
+    "pattern": "(?i)\\bgcloud\\b",
+    "replacement": "Gee Cloud"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "docker -> docker (phonetic hint)",
+    "word": "docker",
+    "spoken": "dock-er"
+  },
+  {
+    "type": "spell_out",
+    "enabled": true,
+    "description": "dockerfile -> dock-er-file",
+    "word": "dockerfile",
+    "spoken": "dock-er-file"
+  },
+  {
+    "type": "replace",
+    "enabled": true,
+    "description": "delint -> de-lint",
+    "find": "delint",
+    "replacement": "de-lint"
+  }
+]

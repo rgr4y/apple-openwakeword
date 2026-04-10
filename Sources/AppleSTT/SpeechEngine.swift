@@ -54,7 +54,10 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
     private let language: String
     private var continuation: AsyncStream<AnalyzerInput>.Continuation?
     private var analyzerTask: Task<Void, Never>?
+    // Accessible from finishUtterance() without relying on the hung task
+    private var lastPartialText: String = ""
     private var accumulatedText: String = ""
+    private var finalFired = false
 
     init(language: String) {
         self.language = language
@@ -75,9 +78,22 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
     }
 
     func finishUtterance() {
+        log("SpeechAnalyzer: finishUtterance — lastPartial=\"\(lastPartialText)\" accumulated=\"\(accumulatedText)\"")
+        // Close input stream
         continuation?.finish()
         continuation = nil
-        // analyzerTask will complete naturally after stream ends
+
+        // Don't wait for the task — it may hang indefinitely on transcriber.results.
+        // Fire the final callback immediately with whatever we have, then cancel.
+        if !finalFired {
+            finalFired = true
+            let text = accumulatedText.isEmpty ? lastPartialText : accumulatedText
+            log("SpeechAnalyzer: firing onFinalTranscript(\"\(text)\") from finishUtterance")
+            onFinalTranscript?(text)
+        }
+
+        analyzerTask?.cancel()
+        analyzerTask = nil
     }
 
     func stop() {
@@ -85,27 +101,32 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
         continuation = nil
         analyzerTask?.cancel()
         analyzerTask = nil
+        lastPartialText = ""
         accumulatedText = ""
+        finalFired = false
     }
 
     // MARK: - Private
 
     private func startAnalyzerSession() {
+        lastPartialText = ""
         accumulatedText = ""
+        finalFired = false
         let (stream, cont) = AsyncStream<AnalyzerInput>.makeStream()
         continuation = cont
 
         let lang = language
         let onPartial = onPartialTranscript
-        let onFinal = onFinalTranscript
         let onError = onError
 
         analyzerTask = Task { [weak self] in
+            log("SpeechAnalyzer task: started")
             let installed = await SpeechTranscriber.installedLocales
             guard let locale = self?.resolveLocale(installed: installed) else {
                 onError?(SpeechEngineError.noInstalledLocale(lang))
                 return
             }
+            log("SpeechAnalyzer task: locale=\(locale.identifier)")
 
             do {
                 let transcriber = SpeechTranscriber(
@@ -114,7 +135,6 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
                 )
                 let analyzer = SpeechAnalyzer(modules: [transcriber])
 
-                // Format negotiation
                 let sourceFormat = AVAudioFormat(
                     commonFormat: .pcmFormatFloat32,
                     sampleRate: 16_000,
@@ -126,34 +146,52 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
                     compatibleWith: [transcriber]),
                    targetFormat != sourceFormat,
                    let converted = makeConvertedStream(stream, from: sourceFormat, to: targetFormat) {
+                    log("SpeechAnalyzer task: resampling \(sourceFormat.sampleRate)Hz → \(targetFormat.sampleRate)Hz")
                     inputStream = converted
                 } else {
                     inputStream = stream
                 }
 
+                log("SpeechAnalyzer task: calling analyzer.start()")
                 try await analyzer.start(inputSequence: inputStream)
+                log("SpeechAnalyzer task: analyzer.start() returned — iterating results")
 
-                var accumulated = ""
                 for try await result in transcriber.results {
-                    guard !Task.isCancelled else { break }
+                    guard !Task.isCancelled else {
+                        log("SpeechAnalyzer task: cancelled during results iteration")
+                        break
+                    }
                     let text = String(result.text.characters)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
+                    log("SpeechAnalyzer task: result isFinal=\(result.isFinal) text=\"\(text)\"", debug: true)
                     if result.isFinal {
                         if !text.isEmpty {
-                            if !accumulated.isEmpty { accumulated += " " }
-                            accumulated += text
+                            if let s = self, !s.accumulatedText.isEmpty { self?.accumulatedText += " " }
+                            self?.accumulatedText += text
                         }
-                        onPartial?(accumulated)
+                        onPartial?(self?.accumulatedText ?? text)
                     } else {
-                        let preview = accumulated.isEmpty ? text : "\(accumulated) \(text)"
+                        if !text.isEmpty { self?.lastPartialText = text }
+                        let preview = (self?.accumulatedText ?? "").isEmpty ? text : "\((self?.accumulatedText)!) \(text)"
                         onPartial?(preview)
                     }
                 }
-                // Stream finished — emit final
-                onFinal?(accumulated)
-                await MainActor.run { self?.accumulatedText = "" }
+
+                log("SpeechAnalyzer task: results sequence ended")
+                // Task completed naturally (rare) — fire final if finishUtterance didn't already
+                if let s = self, !s.finalFired {
+                    s.finalFired = true
+                    let finalText = s.accumulatedText.isEmpty ? s.lastPartialText : s.accumulatedText
+                    log("SpeechAnalyzer task: firing onFinalTranscript(\"\(finalText)\") from task end")
+                    s.onFinalTranscript?(finalText)
+                }
             } catch {
-                onError?(error)
+                if (error as NSError).code == NSUserCancelledError || Task.isCancelled {
+                    log("SpeechAnalyzer task: cancelled")
+                } else {
+                    log("SpeechAnalyzer task: error — \(error)")
+                    onError?(error)
+                }
             }
         }
     }
@@ -289,6 +327,7 @@ final class SFSpeechEngine: SpeechEngineProtocol {
                 self?.bestTranscript = text
                 if result.isFinal {
                     onFinal?(text)
+                    // Reset so continuous speech auto-starts the next segment
                     self?.request = nil
                     self?.task = nil
                 } else {
@@ -299,6 +338,12 @@ final class SFSpeechEngine: SpeechEngineProtocol {
                 // NSError 301 = cancelled, not a real error
                 let nsErr = error as NSError
                 if nsErr.domain == "kAFAssistantErrorDomain" && nsErr.code == 301 { return }
+                // Code 1110 = no speech detected — not fatal, just reset quietly
+                if nsErr.domain == "kAFAssistantErrorDomain" && nsErr.code == 1110 {
+                    self?.request = nil
+                    self?.task = nil
+                    return
+                }
                 onError?(error)
                 self?.request = nil
                 self?.task = nil

@@ -151,13 +151,30 @@ extension WyomingEvent {
     }
 
     static func info(name: String, description: String, languages: [String], version: String) -> WyomingEvent {
+        let attribution: [String: Any] = [
+            "name": "Apple",
+            "url": "https://developer.apple.com/documentation/speech"
+        ]
+        // Wyoming requires languages at the AsrModel level, not the AsrProgram level.
+        // Each language gets its own model entry so HA can enumerate them.
+        let models: [[String: Any]] = languages.map { lang in
+            [
+                "name": "\(name)-\(lang)",
+                "description": "\(description) (\(lang))",
+                "attribution": attribution,
+                "installed": true,
+                "version": version,
+                "languages": [lang],
+            ]
+        }
         let asrInfo: [[String: Any]] = [[
             "name": name,
             "description": description,
-            "languages": languages,
-            "attribution": ["name": "Apple", "url": "https://developer.apple.com/documentation/speech"],
+            "attribution": attribution,
             "installed": true,
             "version": version,
+            "models": models,
+            "supports_transcript_streaming": true,
         ]]
         return WyomingEvent(type: WyomingEventType.info, data: ["asr": asrInfo])
     }

@@ -2,3 +2,7 @@
 .swiftpm/
 *.o
 *.d
+.oww-venv
+config.json
+.venv
+

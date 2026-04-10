@@ -1,0 +1,29 @@
+{
+    "language": "en",
+    "host": "0.0.0.0",
+    "debug": true,
+    "stt": {
+        "port": 10300,
+        "windowSeconds": 6,
+        "silenceWindowSeconds": 1.1,
+        "minTranscriptWords": 1
+    },
+    "tts": {
+        "port": 10200,
+        "rate": 220
+    },
+    "oww": {
+        "host": "localhost",
+        "port": 10400
+    },
+    "llm": {
+        "enabled": false,
+        "endpoint": "http://127.0.0.1:11434",
+        "model": "apple-foundationmodel",
+        "systemPrompt": "You are a helpful voice assistant running on a Mac. Keep responses concise and conversational — they will be spoken aloud via text-to-speech. Avoid markdown, bullet points, or formatting. If the user asks to control a smart home device, use the home_assistant tool. For general questions, just respond directly."
+    },
+    "ha": {
+        "host": "http://homeassistant.local:8123",
+        "token": ""
+    }
+}

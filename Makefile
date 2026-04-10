@@ -1,0 +1,59 @@
+BIN     := apple-stt-wyoming
+RELEASE := .build/release/AppleSTT
+DEBUG   := .build/debug/AppleSTT
+PREFIX  := /usr/local/bin
+
+.PHONY: build release run run-debug run-local-mic run-oww-local oww-local tts-local run-all install uninstall clean
+
+## Default: debug build
+build:
+	swift build
+
+## Optimized release build
+release:
+	swift build -c release
+
+## Run Wyoming STT server only
+run: release
+	$(RELEASE)
+
+## Run the debug binary with verbose logging
+run-debug: build
+	$(DEBUG) --debug
+
+## Run with local mic passthru only (no wake word)
+run-local-mic: release
+	$(RELEASE) --local-mic
+
+## Start wake word server locally — creates .oww-venv on first run
+oww-local:
+	./scripts/run-oww-local.sh
+
+## Start TTS server locally — creates tts/.venv on first run
+tts-local:
+	./scripts/run-tts-local.sh
+
+## STT daemon wired to local OWW (run after oww-local)
+run-oww-local: release
+	$(RELEASE) --local-mic | jq --unbuffered -c .
+
+## Run all three servers together (OWW + TTS + STT) via Honcho
+run-all: release
+	@command -v .oww-venv/bin/honcho >/dev/null 2>&1 || \
+		(./scripts/run-oww-local.sh --setup-only && .oww-venv/bin/pip install --quiet honcho)
+	.oww-venv/bin/honcho start
+
+## Install to /usr/local/bin (or PREFIX=...)
+install: release
+	install -m 755 $(RELEASE) $(PREFIX)/$(BIN)
+	@echo "Installed to $(PREFIX)/$(BIN)"
+
+## Remove installed binary
+uninstall:
+	rm -f $(PREFIX)/$(BIN)
+	@echo "Removed $(PREFIX)/$(BIN)"
+
+## Clean build artifacts and venvs
+clean:
+	swift package clean
+	rm -rf .oww-venv tts/.venv

@@ -80,6 +80,8 @@ private final class ClientSession {
     private var engine: SpeechEngineProtocol?
     private var audioFormat: AudioFormat = .wyomingDefault
     private var isStreaming = false
+    private var chunkCount = 0
+    private var chunkBytes = 0
 
     init(connection: NWConnection, language: String, onDone: @escaping DoneHandler) {
         self.connection = connection
@@ -146,12 +148,14 @@ private final class ClientSession {
     private func handle(_ event: WyomingEvent) {
         switch event.type {
         case WyomingEventType.describe:
+            log("Session: ← describe (HA is probing for STT info)")
             send(.info(
                 name: "apple-stt",
                 description: "Apple on-device Speech Recognition",
                 languages: installedLanguages(),
                 version: "1.0"
             ))
+            log("Session: → info sent (\(installedLanguages().count) languages)")
 
         case WyomingEventType.ping:
             send(.pong())
@@ -175,7 +179,9 @@ private final class ClientSession {
     private func startStreaming(formatData: [String: Any]) {
         audioFormat = AudioFormat(eventData: formatData) ?? .wyomingDefault
         isStreaming = true
-        log("Session: audio-start rate=\(audioFormat.rate) width=\(audioFormat.width) ch=\(audioFormat.channels)")
+        chunkCount = 0
+        chunkBytes = 0
+        log("Session: ← audio-start rate=\(audioFormat.rate) width=\(audioFormat.width) ch=\(audioFormat.channels) — streaming begun")
 
         // Create engine fresh for each utterance
         let eng = makeSpeechEngine(language: language)
@@ -183,11 +189,12 @@ private final class ClientSession {
 
         eng.onPartialTranscript = { [weak self] text in
             guard let self else { return }
+            log("Session: partial → \"\(text)\"")
             self.send(.transcriptChunk(text: text))
         }
         eng.onFinalTranscript = { [weak self] text in
             guard let self else { return }
-            log("Session: transcript = \"\(text)\"")
+            log("Session: → transcript = \"\(text)\"")
             self.send(.transcript(text: text, language: self.language))
             self.isStreaming = false
             self.engine = nil
@@ -205,6 +212,9 @@ private final class ClientSession {
         guard isStreaming, let engine else { return }
         guard let payload = event.payload, !payload.isEmpty else { return }
 
+        chunkCount += 1
+        chunkBytes += payload.count
+
         // Resolve format from chunk data (may differ from audio-start)
         let fmt = AudioFormat(eventData: event.data) ?? audioFormat
 
@@ -215,7 +225,8 @@ private final class ClientSession {
 
     private func stopStreaming() {
         guard isStreaming else { return }
-        log("Session: audio-stop — finishing utterance")
+        let kb = String(format: "%.1f", Double(chunkBytes) / 1024.0)
+        log("Session: ← audio-stop — \(chunkCount) chunks, \(kb) KB received — transcribing...")
         engine?.finishUtterance()
         // Final transcript is delivered via onFinalTranscript callback
     }

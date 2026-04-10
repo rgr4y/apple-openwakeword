@@ -82,6 +82,51 @@ final class AudioDeviceMonitor {
         }
         return status == noErr ? (name as String?) : nil
     }
+
+    /// Returns all input-capable devices as (AudioDeviceID, name) pairs.
+    static func listInputDevices() -> [(AudioDeviceID, String)] {
+        var size = UInt32(0)
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr else { return [] }
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var ids = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids.compactMap { id in
+            guard let name = deviceName(id), hasInputChannels(id) else { return nil }
+            return (id, name)
+        }
+    }
+
+    /// Find the first input device whose name contains the given string (case-insensitive).
+    /// Returns (AudioDeviceID, resolvedName) on match.
+    static func findDevice(named: String) -> (AudioDeviceID, String)? {
+        listInputDevices().first { $0.1.localizedCaseInsensitiveContains(named) }
+    }
+
+    // MARK: - Private helpers
+
+    private static func hasInputChannels(_ deviceID: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size = UInt32(0)
+        guard AudioObjectGetPropertyDataSize(deviceID, &addr, 0, nil, &size) == noErr,
+              size >= UInt32(MemoryLayout<AudioBufferList>.size) else { return false }
+        let ptr = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { ptr.deallocate() }
+        guard AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, ptr) == noErr else { return false }
+        let list = ptr.assumingMemoryBound(to: AudioBufferList.self)
+        return withUnsafeMutablePointer(to: &list.pointee.mBuffers) { basePtr in
+            UnsafeBufferPointer(start: basePtr, count: Int(list.pointee.mNumberBuffers))
+                .contains { $0.mNumberChannels > 0 }
+        }
+    }
 }
 
 // C-compatible callback — cannot capture self
