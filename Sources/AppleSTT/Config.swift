@@ -22,6 +22,8 @@ struct ConfigFile: Decodable {
         var minTranscriptWords: Int?
         var mic1: String?
         var mic2: String?
+        /// Set to false to disable Wyoming TCP listener (local-only / HA-direct mode)
+        var wyomingEnabled: Bool?
     }
 
     struct TTS: Decodable {
@@ -35,6 +37,10 @@ struct ConfigFile: Decodable {
     struct OWW: Decodable {
         var host: String?
         var port: UInt16?
+        /// Wake word model name (e.g. "alexa", "hey_mycroft")
+        var model: String?
+        /// Detection confidence threshold 0.0–1.0 (default: 0.5)
+        var threshold: Double?
     }
 
     struct LLM: Decodable {
@@ -89,6 +95,8 @@ struct Config {
     var owwHost: String? = nil
     var owwPort: UInt16 = 10_400
     var debug: Bool = false
+    /// When false, the Wyoming TCP server is not started (local-only / HA-direct mode)
+    var wyomingEnabled: Bool = true
 
     // LLM (OpenAI-compatible endpoint)
     var llmEndpoint: String? = nil
@@ -183,6 +191,7 @@ struct Config {
             if let v = s.minTranscriptWords  { minTranscriptWords = v }
             if let v = s.mic1               { mic1DeviceName = v }
             if let v = s.mic2               { mic2DeviceName = v }
+            if let v = s.wyomingEnabled      { wyomingEnabled = v }
         }
         if let t = f.tts {
             if let v = t.rate { sayRate = Int(Double(v) * 1.1) }

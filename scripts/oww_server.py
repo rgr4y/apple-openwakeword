@@ -224,13 +224,29 @@ class Session:
 # Server
 # ---------------------------------------------------------------------------
 
+def load_config(path: str = "config.json") -> dict:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 async def main():
+    cfg = load_config()
+    oww_cfg = cfg.get("oww", {})
+    cfg_host = oww_cfg.get("host") or cfg.get("host") or "0.0.0.0"
+    cfg_port = oww_cfg.get("port", 10400)
+    cfg_model = oww_cfg.get("model", "alexa")
+    cfg_threshold = oww_cfg.get("threshold", 0.5)
+    cfg_debug = cfg.get("debug", False)
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=10400)
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--model", default="alexa")
-    parser.add_argument("--threshold", type=float, default=0.5)
-    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--port", type=int, default=cfg_port)
+    parser.add_argument("--host", default=cfg_host)
+    parser.add_argument("--model", default=cfg_model)
+    parser.add_argument("--threshold", type=float, default=cfg_threshold)
+    parser.add_argument("--debug", action="store_true", default=cfg_debug)
     args = parser.parse_args()
 
     logging.basicConfig(

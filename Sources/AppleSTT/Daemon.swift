@@ -52,14 +52,18 @@ final class Daemon {
             await ensureMicrophoneAccess()
         }
 
-        // Start Wyoming TCP server
-        let srv = WyomingServer(port: config.port, language: config.language)
-        server = srv
-        do {
-            try srv.start()
-        } catch {
-            log("ERROR: failed to start Wyoming server: \(error)")
-            exit(1)
+        // Start Wyoming TCP server (skipped when wyomingEnabled = false)
+        if config.wyomingEnabled {
+            let srv = WyomingServer(port: config.port, language: config.language)
+            server = srv
+            do {
+                try srv.start()
+            } catch {
+                log("ERROR: failed to start Wyoming server: \(error)")
+                exit(1)
+            }
+        } else {
+            log("Wyoming TCP listener disabled (wyomingEnabled = false)")
         }
 
         // Start device monitor
@@ -323,7 +327,9 @@ final class Daemon {
             if let llm = self?.llmClient {
                 Task {
                     if let response = await llm.process(text) {
-                        let robj: [String: Any] = ["type": "llm_response", "text": response, "input": text]
+                        let robj: [String: Any] = ["type": "llm_response", "text": response, "input": text,
+                                                    "llm_model": self?.config.llmModel ?? "",
+                                                    "ts": ISO8601DateFormatter().string(from: Date())]
                         if let data = try? JSONSerialization.data(withJSONObject: robj, options: [.sortedKeys]),
                            let line = String(data: data, encoding: .utf8) {
                             print(line)

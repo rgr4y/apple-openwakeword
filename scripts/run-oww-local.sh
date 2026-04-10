@@ -48,15 +48,6 @@ fi
 
 echo "==> Starting openwakeword Wyoming server — model=$MODEL port=$PORT"
 
-# Check if config.json has debug:true
-DEBUG_FLAG=""
-if command -v python3 &>/dev/null; then
-  if python3 -c "import json,sys; d=json.load(open('config.json')); sys.exit(0 if d.get('debug') else 1)" 2>/dev/null; then
-    DEBUG_FLAG="--debug"
-    echo "==> Debug logging enabled (from config.json)"
-  fi
-fi
-
 exec "$VENV/bin/python" "$SCRIPT_DIR/oww_server.py" \
   --port "$PORT" \
-  --model "$MODEL" $DEBUG_FLAG
+  --model "$MODEL"

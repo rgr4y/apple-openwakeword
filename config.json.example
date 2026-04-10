@@ -4,6 +4,7 @@
     "debug": true,
     "stt": {
         "port": 10300,
+        "wyomingEnabled": true,
         "windowSeconds": 6,
         "silenceWindowSeconds": 1.1,
         "minTranscriptWords": 1
@@ -14,7 +15,9 @@
     },
     "oww": {
         "host": "localhost",
-        "port": 10400
+        "port": 10400,
+        "model": "alexa",
+        "threshold": 0.5
     },
     "llm": {
         "enabled": false,
