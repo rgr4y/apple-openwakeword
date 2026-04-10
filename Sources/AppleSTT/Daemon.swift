@@ -532,6 +532,7 @@ final class Daemon {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
             process.arguments = ["-r", String(rate), text]
+            process.standardError = FileHandle.nullDevice
             do {
                 try process.run()
                 process.waitUntilExit()
