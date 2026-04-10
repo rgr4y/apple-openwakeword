@@ -77,7 +77,7 @@ def decode_event(buf: bytes):
 def load_model(model_name: str):
     import openwakeword
     from openwakeword.model import Model
-    _LOGGER.info("Downloading/loading model: %s", model_name)
+    # _LOGGER.info("Downloading/loading model: %s", model_name)
     openwakeword.utils.download_models(model_names=[model_name])
     return Model(wakeword_models=[model_name], inference_framework="onnx")
 
@@ -158,7 +158,7 @@ class Session:
             await self.writer.drain()
 
         elif type_ == "audio-start":
-            _LOGGER.info("← audio-start: %s", {k: v for k, v in data.items() if k not in ("type", "version")})
+            _LOGGER.debug("← audio-start: %s", {k: v for k, v in data.items() if k not in ("type", "version")})
             self._chunks_received = 0
             self._bytes_received = 0
             self._frames_processed = 0
@@ -175,7 +175,7 @@ class Session:
         self._chunks_received += 1
         self._bytes_received += len(payload)
         if self._chunks_received == 1:
-            _LOGGER.info("← first audio-chunk: %d bytes, %d samples", len(payload), len(samples))
+            _LOGGER.debug("← first audio-chunk: %d bytes, %d samples", len(payload), len(samples))
         self._audio_buf = np.concatenate([self._audio_buf, samples])
         # Process in 80ms frames
         frames_this_batch = 0
@@ -240,7 +240,7 @@ async def main():
 
     model = load_model(args.model)
     model_lock = asyncio.Lock()  # serializes predict/reset across concurrent sessions
-    _LOGGER.info("Model loaded: %s", args.model)
+    # _LOGGER.info("Model loaded: %s", args.model)
 
     async def handle(reader, writer):
         session = Session(reader, writer, model, args.model, args.threshold, model_lock)

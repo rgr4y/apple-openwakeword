@@ -24,6 +24,8 @@ final class LLMClient {
     private var tools: [String: LLMTool] = [:]
     private let session = URLSession.shared
     private let maxToolRounds = 5  // prevent infinite tool-call loops
+    private var conversationHistory: [[String: Any]] = []
+    private let maxHistoryTurns = 6  // last 3 exchanges
 
     init(endpoint: String, model: String, systemPrompt: String? = nil) {
         self.endpoint = URL(string: endpoint)!
@@ -35,19 +37,32 @@ final class LLMClient {
         tools[name] = tool
     }
 
+    /// Clear conversation history — call when a new wake word fires.
+    func clearHistory() {
+        conversationHistory = []
+    }
+
+    private func appendHistory(user: String, assistant: String) {
+        conversationHistory.append(["role": "user", "content": user])
+        conversationHistory.append(["role": "assistant", "content": assistant])
+        if conversationHistory.count > maxHistoryTurns {
+            conversationHistory = Array(conversationHistory.suffix(maxHistoryTurns))
+        }
+    }
+
     /// Send a trivial message to /v1/chat/completions to verify the endpoint is up.
     func healthCheck() async {
-        log("LLM healthcheck → \(endpoint.appendingPathComponent("/v1/chat/completions").absoluteString)")
+        log("LLM healthcheck → \(endpoint.appendingPathComponent("/v1/chat/completions").absoluteString)", debug: true)
         let messages: [[String: Any]] = [
             ["role": "system", "content": "You are a helpful assistant. Keep replies very short."],
             ["role": "user", "content": "Reply with just the word 'ok'."],
         ]
         guard let response = await chatCompletion(messages: messages) else {
-            log("LLM healthcheck FAILED — check that apfel is running at \(endpoint.absoluteString)")
+            log("LLM healthcheck FAILED — check that your local LLM is running at \(endpoint.absoluteString)")
             return
         }
         let reply = response["content"] as? String ?? "(no content)"
-        log("LLM healthcheck OK — model=\(model) reply=\(reply.prefix(80))")
+        log("LLM health OK — model=\(model) reply=\(reply.prefix(80).replacingOccurrences(of: "\n", with: ""))")
     }
 
     /// Send a user transcript to the LLM, handle tool calls, return final text response.
@@ -55,23 +70,16 @@ final class LLMClient {
         // Fast path: if a tool's keyword matcher fires, bypass the LLM for the action
         // then ask the LLM to phrase the result as a short spoken response.
         for (name, tool) in tools where tool.matches(text) {
-            log("LLM fast-path: routing to \(name) (keyword match)")
+            log("LLM fast-path: routing to \(name) (keyword match)", debug: true)
             let result = await tool.execute(arguments: ["command": text])
-            log("LLM fast-path result: \(result)")
-            // Ask the model to turn the HA response into a natural spoken sentence
-            let phrasing = await chatCompletion(messages: [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": text],
-                ["role": "assistant", "content": "I'll handle that."],
-                ["role": "user", "content": "The smart home returned: \"\(result)\". Phrase that as a short spoken confirmation, one sentence."],
-            ])
-            return (phrasing?["content"] as? String) ?? result
+            log("LLM fast-path result: \(result)", debug: true)
+            if result != "Done." { appendHistory(user: text, assistant: result) }
+            return result
         }
 
-        var messages: [[String: Any]] = [
-            ["role": "system", "content": systemPrompt],
-            ["role": "user", "content": text],
-        ]
+        var messages: [[String: Any]] = [["role": "system", "content": systemPrompt]]
+        messages += conversationHistory
+        messages.append(["role": "user", "content": text])
 
         for _ in 0..<maxToolRounds {
             guard let response = await chatCompletion(messages: messages) else {
@@ -82,6 +90,7 @@ final class LLMClient {
             if let toolCalls = response["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
                 // Append the assistant message with tool_calls
                 messages.append(response)
+                var allDone = true
 
                 for call in toolCalls {
                     let id = call["id"] as? String ?? ""
@@ -93,8 +102,9 @@ final class LLMClient {
 
                     let result: String
                     if let tool = tools[name] {
-                        log("LLM tool call: \(name)(\(argsString))")
+                        log("LLM tool call: \(name)(\(argsString))", debug: true)
                         result = await tool.execute(arguments: args)
+                        log("LLM tool result: \(String(result.prefix(300)))", debug: true)
                     } else {
                         log("LLM requested unknown tool: \(name)")
                         result = "Error: tool '\(name)' is not available."
@@ -105,12 +115,16 @@ final class LLMClient {
                         "tool_call_id": id,
                         "content": result,
                     ])
+                    if result != "Done." { allDone = false }
                 }
+                // If every tool returned a simple confirmation, skip the LLM rephrasing round
+                if allDone { return "Done." }
                 continue  // loop back to get the final response after tool results
             }
 
             // Plain text response — we're done
             if let content = response["content"] as? String, !content.isEmpty {
+                appendHistory(user: text, assistant: content)
                 return content
             }
 
@@ -146,7 +160,7 @@ final class LLMClient {
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = jsonData
 
-        log("LLM request → \(url.absoluteString) (\(messages.count) messages)")
+        log("LLM request → \(url.absoluteString) (\(messages.count) messages)", debug: true)
 
         do {
             let (data, httpResponse) = try await session.data(for: request)
@@ -165,8 +179,6 @@ final class LLMClient {
                 return nil
             }
 
-            let preview = (message["content"] as? String)?.prefix(80) ?? "(tool_call)"
-            log("LLM response ← \(preview)")
             return message
         } catch {
             log("LLM request failed: \(error)")
@@ -184,5 +196,29 @@ final class LLMClient {
 
     // MARK: - Default system prompt
     // (override via llm.systemPrompt in config.json)
-    static let defaultSystemPrompt = "You are a helpful voice assistant running on a Mac. Keep responses concise and conversational — they will be spoken aloud via text-to-speech. Avoid markdown, bullet points, or formatting. If the user asks to control a smart home device, use the home_assistant tool. For general questions, just respond directly."
+    static let defaultSystemPrompt = """
+        You are a voice assistant for a smart home. Your responses are spoken aloud via \
+        text-to-speech — keep them short, plain, and conversational. No markdown, bullet \
+        points, or formatting. One or two sentences maximum.
+
+        Most smart home commands (turn on/off, etc.) are handled automatically before \
+        reaching you. If a home control request does reach you, use the home_assistant tool \
+        to execute it. For questions about the current state of the home, use the \
+        home_assistant tool to look it up.
+
+        IMPORTANT — home_assistant tool usage:
+        - Pass a single 'command' parameter: a complete English sentence.
+        - Example: "what switches are on?" or "turn off the bedroom lamp".
+        - Send ONE command per question. Never make separate calls per device.
+        - NEVER use 'service', 'entity_id', 'domain', or any HA-specific parameters.
+        - HA handles all device matching internally.
+
+        For general knowledge questions, answer directly from internal knowledge.
+        If you genuinely can't understand a request, reply with "Ummm. Ok?"
+
+        If your response requires the user to answer a follow-up question, append the
+        token REWAKE on its own at the very end of your response (after the question mark).
+        The system will automatically re-open the microphone. Example:
+        "I found three lights on. Which one do you want off? REWAKE"
+        """
 }

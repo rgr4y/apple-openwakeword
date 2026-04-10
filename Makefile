@@ -3,7 +3,7 @@ RELEASE := .build/release/AppleSTT
 DEBUG   := .build/debug/AppleSTT
 PREFIX  := /usr/local/bin
 
-.PHONY: build release run run-debug run-local-mic run-oww-local oww-local tts-local run-all run-ha install uninstall clean
+.PHONY: build release run run-debug run-local-mic run-oww-local oww-local tts-local run-all run-ha satellite install uninstall clean
 
 ## Default: debug build
 build:
@@ -45,12 +45,16 @@ run-all: release
 	.oww-venv/bin/honcho start
 
 ## Run all three servers — HA mode (HA orchestrates the full pipeline)
-## Mac exposes OWW (10400), STT (10300), TTS (10200) as Wyoming services.
-## Register them in HA: Settings → Voice Assistants → configure all four.
+## Mac exposes OWW (10400), STT (10300), TTS (10200), satellite (10700).
+## Add satellite in HA: Settings → Devices → Wyoming Protocol → mac-ip:10700
 run-ha: release
 	@command -v .oww-venv/bin/honcho >/dev/null 2>&1 || \
 		(./scripts/run-oww-local.sh --setup-only && .oww-venv/bin/pip install --quiet honcho)
 	.oww-venv/bin/honcho start -f Procfile.ha
+
+## Run the Wyoming satellite only (streams Mac mic to HA)
+satellite:
+	./scripts/run-satellite.sh
 
 ## Install to /usr/local/bin (or PREFIX=...)
 install: release

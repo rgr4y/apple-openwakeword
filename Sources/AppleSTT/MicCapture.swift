@@ -70,7 +70,7 @@ final class MicCapture {
 
         try eng.start()
         isRunning = true
-        log("MicCapture[\(deviceLabel)]: started (\(tapFormat.sampleRate)Hz \(tapFormat.channelCount)ch → 16kHz mono)")
+        log("MicCapture[\(deviceLabel)]: started (\(tapFormat.sampleRate)Hz \(tapFormat.channelCount)ch → 16kHz mono)", debug: true)
     }
 
     func stop() {
@@ -79,11 +79,11 @@ final class MicCapture {
         engine?.stop()
         engine = nil
         isRunning = false
-        log("MicCapture[\(deviceLabel)]: stopped")
+        log("MicCapture[\(deviceLabel)]: stopped", debug: true)
     }
 
     func restart() throws {
-        log("MicCapture[\(deviceLabel)]: restarting (device change)")
+        log("MicCapture[\(deviceLabel)]: restarting (device change)", debug: true)
         stop()
         try start()
     }
@@ -167,7 +167,7 @@ func ensureMicrophoneAccess(maxRetries: Int = 3) async {
     log("→ Open: System Settings → Privacy & Security → Microphone → enable for Terminal/iTerm2")
 
     for attempt in 1...maxRetries {
-        log("Waiting 2s… (check \(attempt)/\(maxRetries))")
+        log("Waiting 2s… (check \(attempt)/\(maxRetries))", debug: true)
         try? await Task.sleep(nanoseconds: 2_000_000_000)
 
         let status = AVCaptureDevice.authorizationStatus(for: .audio)

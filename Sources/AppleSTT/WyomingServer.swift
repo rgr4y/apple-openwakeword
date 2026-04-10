@@ -148,14 +148,14 @@ private final class ClientSession {
     private func handle(_ event: WyomingEvent) {
         switch event.type {
         case WyomingEventType.describe:
-            log("Session: ← describe (HA is probing for STT info)")
+            log("Session: ← describe (HA is probing for STT info)", debug: true)
             send(.info(
                 name: "apple-stt",
                 description: "Apple on-device Speech Recognition",
                 languages: installedLanguages(),
                 version: "1.0"
             ))
-            log("Session: → info sent (\(installedLanguages().count) languages)")
+            log("Session: → info sent (\(installedLanguages().count) languages)", debug: true)
 
         case WyomingEventType.ping:
             send(.pong())
@@ -181,7 +181,7 @@ private final class ClientSession {
         isStreaming = true
         chunkCount = 0
         chunkBytes = 0
-        log("Session: ← audio-start rate=\(audioFormat.rate) width=\(audioFormat.width) ch=\(audioFormat.channels) — streaming begun")
+        log("Session: ← audio-start rate=\(audioFormat.rate) width=\(audioFormat.width) ch=\(audioFormat.channels) — streaming begun", debug: true)
 
         // Create engine fresh for each utterance
         let eng = makeSpeechEngine(language: language)
@@ -189,7 +189,7 @@ private final class ClientSession {
 
         eng.onPartialTranscript = { [weak self] text in
             guard let self else { return }
-            log("Session: partial → \"\(text)\"")
+            log("Session: partial → \"\(text)\"", debug: true)
             self.send(.transcriptChunk(text: text))
         }
         eng.onFinalTranscript = { [weak self] text in
@@ -226,7 +226,7 @@ private final class ClientSession {
     private func stopStreaming() {
         guard isStreaming else { return }
         let kb = String(format: "%.1f", Double(chunkBytes) / 1024.0)
-        log("Session: ← audio-stop — \(chunkCount) chunks, \(kb) KB received — transcribing...")
+        log("Session: ← audio-stop — \(chunkCount) chunks, \(kb) KB received — transcribing...", debug: true)
         engine?.finishUtterance()
         // Final transcript is delivered via onFinalTranscript callback
     }

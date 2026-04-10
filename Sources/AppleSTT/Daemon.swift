@@ -114,9 +114,11 @@ final class Daemon {
                 guard let self else { return }
                 // Ignore re-triggers while an STT window is already open
                 if self.sttActive {
-                    log("WakeWordClient: wake word ignored — STT window already active")
+                    log("WakeWordClient: wake word ignored — STT window already active", debug: true)
                     return
                 }
+                // Fresh wake — clear any prior conversation context
+                self.llmClient?.clearHistory()
                 playSound("OpenOrEnable2.wav")
                 // JSON line on stdout
                 let obj: [String: Any] = ["type": "wake", "name": name]
@@ -132,22 +134,37 @@ final class Daemon {
             }
             wakeWordClient = client
             client.start()
-            log("WakeWordClient: streaming mic → OWW at \(owwHost):\(config.owwPort)")
+            log("WakeWordClient: streaming mic → OWW at \(owwHost):\(config.owwPort)", debug: true)
         }
 
         // Set up LLM client if endpoint is configured and enabled
         if config.llmEnabled, let llmEndpoint = config.llmEndpoint {
+            var systemPrompt = config.llmSystemPrompt ?? LLMClient.defaultSystemPrompt
+
+            var haForLLM: HAClient? = nil
+            if let haHost = config.haHost, let haToken = config.haToken {
+                let ha = HAClient(host: haHost, token: haToken, language: config.language, agentId: config.haAgentId)
+                haForLLM = ha
+                if let context = await ha.fetchConversationContext() {
+                    systemPrompt += "\n\n" + context
+                    log("LLM: injected HA exposed-entity context into system prompt", debug: true)
+                } else {
+                    log("LLM: could not fetch HA device context (HA unreachable or none exposed?)")
+                }
+            }
+
             let client = LLMClient(
                 endpoint: llmEndpoint,
                 model: config.llmModel,
-                systemPrompt: config.llmSystemPrompt
+                systemPrompt: systemPrompt
             )
-            // Register HA as a tool if configured
-            if let haHost = config.haHost, let haToken = config.haToken {
-                let ha = HAClient(host: haHost, token: haToken, language: config.language, agentId: config.haAgentId)
+            if let ha = haForLLM {
                 client.registerTool(ha, name: "home_assistant")
-                log("LLM: registered home_assistant tool → \(haHost)")
+                haClient = ha  // also keep reference for LLM-unavailable fallback
+                log("LLM: registered home_assistant tool → \(config.haHost!)", debug: true)
             }
+            client.registerTool(TimeTool(), name: "get_time")
+            log("LLM: registered get_time tool", debug: true)
             llmClient = client
             log("LLM client → \(llmEndpoint) model=\(config.llmModel)")
             Task { await client.healthCheck() }
@@ -168,7 +185,7 @@ final class Daemon {
         localEngine = makeSpeechEngine(language: config.language)
         localEngine?.onPartialTranscript = { text in
             // Show live partials on stderr for debugging
-            log("[partial] \(text)", debug: false)
+            log("[partial] \(text)", debug: true)
         }
         let source: String? = dualMic ? mic1Label : nil
         localEngine?.onFinalTranscript = { text in
@@ -197,7 +214,7 @@ final class Daemon {
 
         do {
             try capture.start()
-            log("Local mic capture started (\(mic1Label))")
+            log("Local mic capture started (\(mic1Label))", debug: true)
         } catch {
             log("ERROR: failed to start mic capture: \(error)")
         }
@@ -244,6 +261,16 @@ final class Daemon {
         silenceTimer = st
     }
 
+    private func endConversation(reWake: Bool = false) {
+        log("endConversation", debug: true);
+        playSound("CloseOrDisable2.wav")
+        if reWake {
+            log("Re-waking STT window after question response")
+            playSound("OpenOrEnable2.wav")
+            openSTTWindow()
+        }
+    }
+
     private func closeSTTWindow() {
         sttWindowTimer?.cancel()
         sttWindowTimer = nil
@@ -259,17 +286,20 @@ final class Daemon {
         let eng = makeSpeechEngine(language: config.language)
         eng.onPartialTranscript = { [weak self] text in
             self?.lastPartialAt = Date()
-            log("[partial] \(text)")
+            log("[partial] \(text)", debug: true)
             // Arm (or reset) the trailing-edge silence timer on every partial
             self?.armSilenceTimer()
         }
         let source: String? = dualMic ? mic1Label : nil
         let minWords = config.minTranscriptWords
         eng.onFinalTranscript = { [weak self] text in
-            guard !text.isEmpty else { return }
+            guard !text.isEmpty else {
+                self?.endConversation()
+                return
+            }
             let wordCount = text.split(separator: " ").count
             guard wordCount >= minWords else {
-                log("transcript ignored — too short (\(wordCount) word(s)): \"\(text)\"")
+                log("transcript ignored — too short (\(wordCount) word(s)): \"\(text)\"", debug: true)
                 return
             }
             var obj: [String: Any] = ["type": "transcript", "text": text]
@@ -282,32 +312,59 @@ final class Daemon {
             // Auto-close window if engine already delivered a final
             self?.closeSTTWindow()
 
+            // Bail out of any re-wake loop if the user says stop/no/etc.
+            if self?.isConversationEnder(text) == true {
+                log("Conversation ender detected — closing loop")
+                self?.endConversation()
+                return
+            }
+
             // Send to LLM if configured, otherwise direct to HA if available
             if let llm = self?.llmClient {
                 Task {
                     if let response = await llm.process(text) {
-                        log("LLM response: \(response)")
                         let robj: [String: Any] = ["type": "llm_response", "text": response, "input": text]
                         if let data = try? JSONSerialization.data(withJSONObject: robj, options: [.sortedKeys]),
                            let line = String(data: data, encoding: .utf8) {
                             print(line)
                             fflush(stdout)
                         }
-                        self?.speak(response) { playSound("CloseOrDisable2.wav") }
+                        let (spoken, reWake) = self?.extractReWake(response) ?? (response, false)
+                        self?.speak(spoken) {
+                            self?.endConversation(reWake: reWake)
+                        }
+                    } else if let ha = self?.haClient {
+                        // LLM failed (nil) — fall back to HA directly
+                        log("LLM unavailable — falling back to HA for: \"\(text)\"")
+                        let response = await ha.execute(arguments: ["command": text])
+                        log("HA fallback response: \(response)")
+                        let robj: [String: Any] = ["type": "ha_response", "text": response, "input": text]
+                        if let data = try? JSONSerialization.data(withJSONObject: robj, options: [.sortedKeys]),
+                           let line = String(data: data, encoding: .utf8) {
+                            print(line)
+                            fflush(stdout)
+                        }
+                        let (spoken, reWake) = self?.extractReWake(response) ?? (response, false)
+                        self?.speak(spoken) {
+                            self?.endConversation(reWake: reWake)
+                        }
                     }
                 }
             } else if let ha = self?.haClient {
                 Task {
-                    log("HA direct: \"\(text)\"")
+                    log("HA direct: \"\(text)\"", debug: true)
                     let response = await ha.execute(arguments: ["command": text])
-                    log("HA response: \(response)")
+                    log("HA response: \(response)", debug: true)
                     let robj: [String: Any] = ["type": "ha_response", "text": response, "input": text]
                     if let data = try? JSONSerialization.data(withJSONObject: robj, options: [.sortedKeys]),
                        let line = String(data: data, encoding: .utf8) {
                         print(line)
                         fflush(stdout)
                     }
-                    self?.speak(response) { playSound("CloseOrDisable2.wav") }
+                    let (spoken, reWake) = self?.extractReWake(response) ?? (response, false)
+                    self?.speak(spoken) {
+                        self?.endConversation(reWake: reWake)
+                    }
                 }
             }
         }
@@ -322,7 +379,7 @@ final class Daemon {
 
         let eng2 = makeSpeechEngine(language: config.language)
         localEngine2 = eng2
-        eng2.onPartialTranscript = { text in log("[partial/mic2] \(text)") }
+        eng2.onPartialTranscript = { text in log("[partial/mic2] \(text)", debug: true) }
         let label = mic2Label
         eng2.onFinalTranscript = { text in
             guard !text.isEmpty else { return }
@@ -344,7 +401,7 @@ final class Daemon {
 
         do {
             try capture.start()
-            log("Mic2 capture started (\(label))")
+            log("Mic2 capture started (\(label))", debug: true)
         } catch {
             log("ERROR: failed to start mic2 capture: \(error)")
         }
@@ -407,6 +464,60 @@ final class Daemon {
     }
 
     // MARK: - TTS output
+
+    /// Short phrases that signal the user wants to end the conversation.
+    private func isConversationEnder(_ text: String) -> Bool {
+        // Strip ALL punctuation (including internal commas/apostrophes), normalize spaces.
+        // "No, cancel" → "no cancel";  "Stop it." → "stop it";  "That's all." → "thats all"
+        let stripped = String(text.unicodeScalars.filter {
+            !CharacterSet.punctuationCharacters.contains($0)
+        })
+        let t = stripped.lowercased()
+            .components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let words = t.components(separatedBy: " ").filter { !$0.isEmpty }
+
+        // Tier 1: exact single/multi-word matches
+        let exactEnders: Set<String> = [
+            "stop", "no", "nope", "nothing", "never mind", "nevermind",
+            "thats all", "thanks", "thank you", "goodbye", "bye", "exit",
+            "cancel", "im good", "all good", "no thanks", "no thank you",
+            "im done", "all done", "enough", "ok bye", "okay bye",
+        ]
+        if exactEnders.contains(t) { return true }
+
+        // Tier 2: explicit 2-word enders that are unambiguous
+        let twoWordEnders: Set<String> = [
+            "stop it", "stop that", "stop please", "just stop",
+            "cancel it", "cancel that", "forget it", "forget that",
+            "no cancel", "no more", "no way", "no stop", "quit it",
+            "thats it", "thats enough", "im out", "never mind",
+        ]
+        if twoWordEnders.contains(t) { return true }
+
+        // Tier 3: short phrase (1-2 words) whose first word is a hard-stop verb.
+        // Avoids false-positives on "stop the fan" (3 words) or "cancel the timer" (3 words).
+        let hardStopVerbs: Set<String> = ["stop", "cancel", "quit", "exit", "bye", "goodbye"]
+        if let first = words.first, hardStopVerbs.contains(first), words.count <= 2 {
+            return true
+        }
+
+        return false
+    }
+
+    /// Strip REWAKE sentinel and/or detect trailing `?`.
+    /// Returns (text to speak, shouldReWake).
+    private func extractReWake(_ text: String) -> (String, Bool) {
+        var s = text.trimmingCharacters(in: .whitespaces)
+        var reWake = false
+        if s.hasSuffix(" REWAKE") {
+            s = String(s.dropLast(7)).trimmingCharacters(in: .whitespaces)
+            reWake = true
+        }
+        if s.contains("?") { reWake = true }
+        return (s, reWake)
+    }
 
     /// Speak text using macOS built-in `say` command (non-blocking).
     private func speak(_ text: String, completion: (() -> Void)? = nil) {

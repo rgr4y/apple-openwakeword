@@ -66,7 +66,7 @@ final class WakeWordClient {
 
     private func connect() {
         guard !stopped else { return }
-        log("WakeWordClient: connecting to \(host):\(port)…")
+        log("WakeWordClient: connecting to \(host):\(port)…", debug: true)
         let endpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port)!
@@ -143,7 +143,7 @@ final class WakeWordClient {
         let startEvent = WyomingEvent(type: WyomingEventType.audioStart, data: fmt.eventData)
         sendRaw(wyomingEncode(startEvent))
         audioStartSent = true
-        log("WakeWordClient: → audio-start sent (rate=\(fmt.rate), width=\(fmt.width), channels=\(fmt.channels))")
+        log("WakeWordClient: → audio-start sent (rate=\(fmt.rate), width=\(fmt.width), channels=\(fmt.channels))", debug: true)
 
         // Periodic stats (every 5s when debug is on)
         statsTimer?.cancel()
@@ -164,7 +164,7 @@ final class WakeWordClient {
         micCapture = capture
         do {
             try capture.start()
-            log("WakeWordClient: mic capture started (oww-feed)")
+            log("WakeWordClient: mic capture started (oww-feed)", debug: true)
         } catch {
             log("WakeWordClient: mic start failed: \(error)")
         }
@@ -187,7 +187,7 @@ final class WakeWordClient {
         chunksSent += 1
         bytesSent += UInt64(pcm.count)
         if chunksSent == 1 {
-            log("WakeWordClient: → first audio-chunk sent (\(pcm.count) bytes, \(samples.count) samples)")
+            log("WakeWordClient: → first audio-chunk sent (\(pcm.count) bytes, \(samples.count) samples)", debug: true)
         }
     }
 
@@ -230,7 +230,7 @@ final class WakeWordClient {
         case WyomingEventType.info:
             if let owwList = event.data["wake"] as? [[String: Any]] {
                 let names = owwList.compactMap { $0["name"] as? String }
-                log("WakeWordClient: OWW models available: \(names.joined(separator: ", "))")
+                log("WakeWordClient: OWW models available: \(names.joined(separator: ", "))", debug: true)
             }
         default:
             log("WakeWordClient: received \(event.type)", debug: true)
@@ -255,7 +255,7 @@ func playSound(_ filename: String, waitForCompletion: Bool = false) {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
     let soundURL = projectRoot.appendingPathComponent("sounds/\(filename)")
-    log("playSound: \(soundURL.path)")
+    /// log("playSound: \(soundURL.path)")
     guard let sound = NSSound(contentsOf: soundURL, byReference: false) else {
         log("playSound: file not found at \(soundURL.path)")
         return
@@ -264,7 +264,7 @@ func playSound(_ filename: String, waitForCompletion: Bool = false) {
     // NSSound must be used on the main thread
     DispatchQueue.main.async {
         let ok = sound.play()
-        log("playSound: play() → \(ok) for \(filename) (duration=\(String(format: "%.2f", duration))s)")
+        log("playSound: play() → \(ok) for \(filename) (duration=\(String(format: "%.2f", duration))s)", debug: true)
         // Retain sound until playback ends (NSSound is non-retaining by default)
         DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.5) { _ = sound.self }
     }

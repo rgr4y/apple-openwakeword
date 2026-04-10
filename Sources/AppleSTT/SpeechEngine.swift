@@ -78,7 +78,7 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
     }
 
     func finishUtterance() {
-        log("SpeechAnalyzer: finishUtterance — lastPartial=\"\(lastPartialText)\" accumulated=\"\(accumulatedText)\"")
+        log("SpeechAnalyzer: finishUtterance — lastPartial=\"\(lastPartialText)\" accumulated=\"\(accumulatedText)\"", debug: true)
         // Close input stream
         continuation?.finish()
         continuation = nil
@@ -88,7 +88,7 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
         if !finalFired {
             finalFired = true
             let text = accumulatedText.isEmpty ? lastPartialText : accumulatedText
-            log("SpeechAnalyzer: firing onFinalTranscript(\"\(text)\") from finishUtterance")
+            log("SpeechAnalyzer: firing onFinalTranscript(\"\(text)\") from finishUtterance", debug: true)
             onFinalTranscript?(text)
         }
 
@@ -120,13 +120,13 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
         let onError = onError
 
         analyzerTask = Task { [weak self] in
-            log("SpeechAnalyzer task: started")
+            log("SpeechAnalyzer task: started", debug: true)
             let installed = await SpeechTranscriber.installedLocales
             guard let locale = self?.resolveLocale(installed: installed) else {
                 onError?(SpeechEngineError.noInstalledLocale(lang))
                 return
             }
-            log("SpeechAnalyzer task: locale=\(locale.identifier)")
+            log("SpeechAnalyzer task: locale=\(locale.identifier)", debug: true)
 
             do {
                 let transcriber = SpeechTranscriber(
@@ -146,19 +146,19 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
                     compatibleWith: [transcriber]),
                    targetFormat != sourceFormat,
                    let converted = makeConvertedStream(stream, from: sourceFormat, to: targetFormat) {
-                    log("SpeechAnalyzer task: resampling \(sourceFormat.sampleRate)Hz → \(targetFormat.sampleRate)Hz")
+                    log("SpeechAnalyzer task: resampling \(sourceFormat.sampleRate)Hz → \(targetFormat.sampleRate)Hz", debug: true)
                     inputStream = converted
                 } else {
                     inputStream = stream
                 }
 
-                log("SpeechAnalyzer task: calling analyzer.start()")
+                log("SpeechAnalyzer task: calling analyzer.start()", debug: true)
                 try await analyzer.start(inputSequence: inputStream)
-                log("SpeechAnalyzer task: analyzer.start() returned — iterating results")
+                log("SpeechAnalyzer task: analyzer.start() returned — iterating results", debug: true)
 
                 for try await result in transcriber.results {
                     guard !Task.isCancelled else {
-                        log("SpeechAnalyzer task: cancelled during results iteration")
+                        log("SpeechAnalyzer task: cancelled during results iteration", debug: true)
                         break
                     }
                     let text = String(result.text.characters)
@@ -177,17 +177,17 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
                     }
                 }
 
-                log("SpeechAnalyzer task: results sequence ended")
+                log("SpeechAnalyzer task: results sequence ended", debug: true)
                 // Task completed naturally (rare) — fire final if finishUtterance didn't already
                 if let s = self, !s.finalFired {
                     s.finalFired = true
                     let finalText = s.accumulatedText.isEmpty ? s.lastPartialText : s.accumulatedText
-                    log("SpeechAnalyzer task: firing onFinalTranscript(\"\(finalText)\") from task end")
+                    log("SpeechAnalyzer task: firing onFinalTranscript(\"\(finalText)\") from task end", debug: true)
                     s.onFinalTranscript?(finalText)
                 }
             } catch {
                 if (error as NSError).code == NSUserCancelledError || Task.isCancelled {
-                    log("SpeechAnalyzer task: cancelled")
+                    log("SpeechAnalyzer task: cancelled", debug: true)
                 } else {
                     log("SpeechAnalyzer task: error — \(error)")
                     onError?(error)
@@ -197,16 +197,48 @@ final class SpeechAnalyzerEngine: SpeechEngineProtocol {
     }
 
     private func resolveLocale(installed: [Locale]) -> Locale? {
-        let normalized = language.replacingOccurrences(of: "_", with: "-").lowercased()
-        // Exact match
-        if let exact = installed.first(where: {
-            $0.identifier.replacingOccurrences(of: "_", with: "-").lowercased() == normalized
-        }) { return exact }
-        // Language prefix match
-        let langPrefix = String(normalized.split(separator: "-").first ?? Substring(normalized))
-        return installed.first(where: {
-            $0.identifier.lowercased().hasPrefix(langPrefix)
-        })
+        let installedIDs = installed.map { $0.identifier.replacingOccurrences(of: "_", with: "-").lowercased() }
+        guard !installedIDs.isEmpty else { return nil }
+
+        let configured = language.replacingOccurrences(of: "_", with: "-").lowercased()
+
+        // Build a priority-ordered list of candidate identifiers to try, mirroring george's logic:
+        // 1. Exact configured language (e.g. "en-us")
+        // 2. System current locale if it shares the language prefix (e.g. current=en-AU when lang=en)
+        // 3. OS preferred languages that share the prefix
+        // 4. For bare "en", hardcode "en-us" as the last fallback before giving up
+        var candidates: [String] = [configured]
+
+        let langCode = String(configured.split(separator: "-").first ?? Substring(configured))
+        let prefix = langCode + "-"
+
+        let currentID = Locale.current.identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        if currentID.hasPrefix(prefix) { candidates.append(currentID) }
+
+        for pref in Locale.preferredLanguages {
+            let n = pref.replacingOccurrences(of: "_", with: "-").lowercased()
+            if n.hasPrefix(prefix) { candidates.append(n) }
+        }
+
+        if langCode == "en" { candidates.append("en-us") }
+
+        // Deduplicate while preserving order
+        var seen = Set<String>()
+        let orderedCandidates = candidates.filter { seen.insert($0).inserted }
+
+        // First try exact candidate matches
+        for candidate in orderedCandidates {
+            if installedIDs.contains(candidate) {
+                return installed[installedIDs.firstIndex(of: candidate)!]
+            }
+        }
+
+        // Fall back to any installed locale sharing the language prefix, preferring en-us for English
+        let prefixMatches = zip(installedIDs, installed).filter { $0.0.hasPrefix(prefix) || $0.0 == langCode }
+        if langCode == "en", let usMatch = prefixMatches.first(where: { $0.0 == "en-us" }) {
+            return usMatch.1
+        }
+        return prefixMatches.first?.1
     }
 
     private func makePCMBuffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
