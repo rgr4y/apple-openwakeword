@@ -24,6 +24,7 @@
     },
     "ha": {
         "host": "http://homeassistant.local:8123",
-        "token": ""
+        "token": "",
+        "agentId": "conversation.google_generative_ai_conversation"
     }
 }

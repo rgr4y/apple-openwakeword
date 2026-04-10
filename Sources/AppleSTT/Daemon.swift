@@ -144,7 +144,7 @@ final class Daemon {
             )
             // Register HA as a tool if configured
             if let haHost = config.haHost, let haToken = config.haToken {
-                let ha = HAClient(host: haHost, token: haToken, language: config.language)
+                let ha = HAClient(host: haHost, token: haToken, language: config.language, agentId: config.haAgentId)
                 client.registerTool(ha, name: "home_assistant")
                 log("LLM: registered home_assistant tool → \(haHost)")
             }
@@ -153,8 +153,8 @@ final class Daemon {
             Task { await client.healthCheck() }
         } else if let haHost = config.haHost, let haToken = config.haToken {
             // No LLM — send transcripts directly to HA
-            haClient = HAClient(host: haHost, token: haToken, language: config.language)
-            log("HA direct mode → \(haHost)")
+            haClient = HAClient(host: haHost, token: haToken, language: config.language, agentId: config.haAgentId)
+            log("HA direct mode → \(haHost)\(config.haAgentId.map { " agent=\($0)" } ?? " (no agent_id — HA will use built-in agent)")")
         }
 
         log("Ready — Wyoming STT server listening on :\(config.port)")

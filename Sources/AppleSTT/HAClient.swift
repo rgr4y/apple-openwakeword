@@ -8,11 +8,13 @@ final class HAClient: LLMTool {
     private let token: String
     private let session = URLSession.shared
     private let language: String
+    private let agentId: String?
 
-    init(host: String, token: String, language: String = "en") {
+    init(host: String, token: String, language: String = "en", agentId: String? = nil) {
         self.baseURL = URL(string: host)!
         self.token = token
         self.language = language
+        self.agentId = agentId
     }
 
     // MARK: - LLMTool conformance
@@ -76,10 +78,13 @@ final class HAClient: LLMTool {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 15
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "text": text,
             "language": language,
         ]
+        if let agentId {
+            body["agent_id"] = agentId
+        }
 
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
             return "Error: failed to encode request"

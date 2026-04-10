@@ -53,6 +53,9 @@ struct ConfigFile: Decodable {
         var host: String?
         /// Long-lived access token
         var token: String?
+        /// Conversation agent entity ID (e.g. conversation.google_generative_ai_conversation)
+        /// If omitted, HA uses its built-in rule-based agent — NOT the one configured in the UI.
+        var agentId: String?
     }
 
     var stt: STT?
@@ -96,6 +99,7 @@ struct Config {
     // Home Assistant
     var haHost: String? = nil
     var haToken: String? = nil
+    var haAgentId: String? = nil
 
     // STT window tuning
     var sttWindowSeconds: Double = 8.0
@@ -189,8 +193,9 @@ struct Config {
             if let v = l.enabled      { llmEnabled = v }
         }
         if let h = f.ha {
-            if let v = h.host  { haHost = v }
+            if let v = h.host              { haHost = v }
             if let v = h.token, !v.isEmpty { haToken = v }
+            if let v = h.agentId           { haAgentId = v }
         }
     }
 }
