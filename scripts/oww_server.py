@@ -109,12 +109,13 @@ def build_info_event(model_name: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 class Session:
-    def __init__(self, reader, writer, model, model_name, threshold):
+    def __init__(self, reader, writer, model, model_name, threshold, model_lock):
         self.reader = reader
         self.writer = writer
         self.model = model
         self.model_name = model_name
         self.threshold = threshold
+        self.model_lock = model_lock
         self._buf = b""
         self._audio_buf = np.array([], dtype=np.int16)
         self._chunks_received = 0
@@ -192,21 +193,23 @@ class Session:
 
 
     async def _predict(self, frame: np.ndarray):
-        # Run in executor so we don't block the event loop
+        # Serialize model access — OWW model is not thread-safe; multiple clients
+        # sharing one model instance must not call predict/reset concurrently.
         loop = asyncio.get_event_loop()
-        predictions = await loop.run_in_executor(None, self.model.predict, frame)
-        for name, score in predictions.items():
-            if score >= self.threshold:
-                _LOGGER.info("*** WAKE WORD: %s (score=%.3f) ***", name, score)
-                det = encode_event("detection", {
-                    "name": name,
-                    "score": float(score),
-                    "timestamp": None,
-                })
-                self.writer.write(det)
-                await self.writer.drain()
-                # Reset model state after detection
-                self.model.reset()
+        async with self.model_lock:
+            predictions = await loop.run_in_executor(None, self.model.predict, frame)
+            for name, score in predictions.items():
+                if score >= self.threshold:
+                    _LOGGER.info("*** WAKE WORD: %s (score=%.3f) ***", name, score)
+                    det = encode_event("detection", {
+                        "name": name,
+                        "score": float(score),
+                        "timestamp": None,
+                    })
+                    self.writer.write(det)
+                    await self.writer.drain()
+                    # Reset model state after detection
+                    self.model.reset()
 
 
 # ---------------------------------------------------------------------------
@@ -228,10 +231,11 @@ async def main():
     )
 
     model = load_model(args.model)
+    model_lock = asyncio.Lock()  # serializes predict/reset across concurrent sessions
     _LOGGER.info("Model loaded: %s", args.model)
 
     async def handle(reader, writer):
-        session = Session(reader, writer, model, args.model, args.threshold)
+        session = Session(reader, writer, model, args.model, args.threshold, model_lock)
         await session.run()
 
     server = await asyncio.start_server(handle, args.host, args.port)
