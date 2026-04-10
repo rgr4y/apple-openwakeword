@@ -116,6 +116,8 @@ class Session:
         self.model_name = model_name
         self.threshold = threshold
         self.model_lock = model_lock
+        self._connect_time = asyncio.get_event_loop().time()
+        self._warmup_seconds = 3.0  # ignore detections during model warmup
         self._buf = b""
         self._audio_buf = np.array([], dtype=np.int16)
         self._chunks_received = 0
@@ -198,8 +200,14 @@ class Session:
         loop = asyncio.get_event_loop()
         async with self.model_lock:
             predictions = await loop.run_in_executor(None, self.model.predict, frame)
+            now = loop.time()
+            in_warmup = (now - self._connect_time) < self._warmup_seconds
             for name, score in predictions.items():
                 if score >= self.threshold:
+                    if in_warmup:
+                        _LOGGER.debug("Ignoring detection during warmup: %s (score=%.3f, %.1fs since connect)",
+                                      name, score, now - self._connect_time)
+                        continue
                     _LOGGER.info("*** WAKE WORD: %s (score=%.3f) ***", name, score)
                     det = encode_event("detection", {
                         "name": name,

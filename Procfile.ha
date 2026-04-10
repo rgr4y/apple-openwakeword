@@ -4,4 +4,4 @@
 # In HA: Settings → Voice Assistants → configure all four services.
 oww: bash scripts/run-oww-local.sh
 tts: bash scripts/run-tts-local.sh
-stt: .build/release/AppleSTT
+stt: .build/release/AppleSTT --ha-mode

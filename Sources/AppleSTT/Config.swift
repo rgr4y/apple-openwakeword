@@ -151,6 +151,11 @@ struct Config {
             case "--min-words":
                 i += 1
                 if i < args.count, let v = Int(args[i]) { cfg.minTranscriptWords = v }
+            case "--ha-mode":
+                // HA-orchestrated mode: disable local mic and OWW client.
+                // HA drives the full pipeline; this daemon is a pure STT server.
+                cfg.localMic = false
+                cfg.owwHost = nil
             case "--debug":
                 cfg.debug = true
             case "--help", "-h":
