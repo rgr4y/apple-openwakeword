@@ -1,0 +1,17 @@
+# Wyoming satellite — optional, for streaming mic audio to Home Assistant directly
+# (alternative to the built-in local pipeline)
+#
+# Install:
+#   pip install -r satellite/requirements.txt
+#
+# Run (example):
+#   wyoming-satellite \
+#     --name "mac-satellite" \
+#     --uri tcp://0.0.0.0:10700 \
+#     --mic-command "sox -d -r 16000 -c 1 -b 16 -e signed-integer -t raw -" \
+#     --wake-uri tcp://localhost:10400 \
+#     --wake-word-name alexa
+#
+# Then add it in HA: Settings → Devices & Services → Wyoming Protocol → host:port 10700
+
+wyoming-satellite==1.0.0
