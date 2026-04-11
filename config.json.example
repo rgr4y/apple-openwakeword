@@ -17,7 +17,15 @@
         "host": "localhost",
         "port": 10400,
         "model": "alexa",
-        "threshold": 0.5
+        "threshold": 0.5,
+        "agc": {
+            "enabled": true,
+            "targetRMS": 0.02,
+            "attack": 0.002,
+            "release": 0.02,
+            "minGain": 0.5,
+            "maxGain": 20.0
+        }
     },
     "llm": {
         "enabled": false,

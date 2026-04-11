@@ -20,6 +20,7 @@ final class Daemon {
     private var mic2DeviceID: AudioDeviceID? = nil
     private var mic2Label: String = "mic2"
     private var restartPending = false
+    private var devicePollTimer: DispatchSourceTimer?
     private var wakeWordClient: WakeWordClient?
     private var llmClient: LLMClient?
     private var haClient: HAClient?
@@ -113,7 +114,16 @@ final class Daemon {
 
         // Start wake word client if OWW host is configured
         if let owwHost = config.owwHost {
-            let client = WakeWordClient(host: owwHost, port: config.owwPort)
+            let client = WakeWordClient(
+                host: owwHost,
+                port: config.owwPort,
+                agcEnabled: config.owwAgcEnabled,
+                agcTargetRMS: config.owwAgcTargetRMS,
+                agcAttack: config.owwAgcAttack,
+                agcRelease: config.owwAgcRelease,
+                agcMinGain: config.owwAgcMinGain,
+                agcMaxGain: config.owwAgcMaxGain
+            )
             client.onDetection = { [weak self] name in
                 guard let self else { return }
                 // Ignore re-triggers while an STT window is already open
@@ -423,50 +433,73 @@ final class Daemon {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else { return }
             self.restartPending = false
-            self.localEngine?.stop()
-            self.localEngine = nil
+            self.attemptMicRestart()
+        }
+    }
 
-            do {
-                try self.micCapture?.restart()
-            } catch {
-                log("ERROR restarting mic capture: \(error)")
-                self.micCapture = nil
-            }
+    /// Try to restart mic capture.  If no input device exists, enter a poll loop
+    /// that retries every 2 s until one reappears.
+    private func attemptMicRestart() {
+        localEngine?.stop()
+        localEngine = nil
+        micCapture?.stop()
+        micCapture = nil
 
-            self.localEngine = makeSpeechEngine(language: self.config.language)
-            self.localEngine?.onPartialTranscript = { _ in }
-            let source: String? = self.dualMic ? self.mic1Label : nil
-            self.localEngine?.onFinalTranscript = { text in
-                guard !text.isEmpty else { return }
-                var obj: [String: Any] = ["type": "transcript", "text": text]
-                if let src = source { obj["source"] = src }
-                if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
-                   let line = String(data: data, encoding: .utf8) {
-                    print(line)
-                    fflush(stdout)
-                }
-            }
-            self.localEngine?.onError = { error in
-                log("LocalEngine error after restart: \(error)")
-            }
+        // Check if a device exists *before* creating a new capture
+        guard AudioDeviceMonitor.currentDefaultInputDeviceID() != nil else {
+            log("No input device available — polling until one appears…")
+            startDevicePoll()
+            return
+        }
 
-            // Reconnect capture → new engine
-            if let cap = self.micCapture {
-                let eng = self.localEngine
-                cap.stop()
-                // mic1DeviceID is nil here because we only restart when tracking system default
-                let newCap = MicCapture(deviceID: nil, label: self.mic1Label) { samples in
-                    eng?.feedSamples(samples)
-                }
-                self.micCapture = newCap
-                do {
-                    try newCap.start()
-                    log("Mic capture restarted on new device")
-                } catch {
-                    log("ERROR restarting mic capture: \(error)")
-                }
+        localEngine = makeSpeechEngine(language: config.language)
+        localEngine?.onPartialTranscript = { _ in }
+        let source: String? = dualMic ? mic1Label : nil
+        localEngine?.onFinalTranscript = { text in
+            guard !text.isEmpty else { return }
+            var obj: [String: Any] = ["type": "transcript", "text": text]
+            if let src = source { obj["source"] = src }
+            if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+               let line = String(data: data, encoding: .utf8) {
+                print(line)
+                fflush(stdout)
             }
         }
+        localEngine?.onError = { error in
+            log("LocalEngine error after restart: \(error)")
+        }
+
+        let eng = localEngine
+        let newCap = MicCapture(deviceID: nil, label: mic1Label) { samples in
+            eng?.feedSamples(samples)
+        }
+        micCapture = newCap
+        do {
+            try newCap.start()
+            log("Mic capture restarted on new device")
+        } catch {
+            log("Mic capture restart failed: \(error) — will poll for device")
+            micCapture = nil
+            startDevicePoll()
+        }
+    }
+
+    /// Poll every 2 s until a default input device reappears, then restart capture.
+    private func startDevicePoll() {
+        devicePollTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            if AudioDeviceMonitor.currentDefaultInputDeviceID() != nil {
+                self.devicePollTimer?.cancel()
+                self.devicePollTimer = nil
+                log("Input device reappeared — restarting capture")
+                self.attemptMicRestart()
+            }
+        }
+        timer.resume()
+        devicePollTimer = timer
     }
 
     // MARK: - TTS output

@@ -21,9 +21,37 @@ final class MicCapture {
     /// Human-readable label used in log messages.
     let deviceLabel: String
 
-    init(deviceID: AudioDeviceID? = nil, label: String = "default", onSamples: @escaping SampleHandler) {
+    // MARK: - Software AGC
+    // Normalises the signal level so quiet periods (or OS gain drops) don't
+    // starve the wake word detector.  Uses a slow attack / faster release
+    // envelope so transients aren't clipped.
+    private let agcEnabled: Bool
+    private var softGain: Float = 1.0
+    private let agcTargetRMS: Float
+    private let agcAttack:  Float
+    private let agcRelease: Float
+    private let agcMinGain: Float
+    private let agcMaxGain: Float
+    /// Returns the most recent gain multiplier (for logging / diagnostics).
+    private(set) var currentGain: Float = 1.0
+
+    init(deviceID: AudioDeviceID? = nil,
+         label: String = "default",
+         agcEnabled: Bool = true,
+         agcTargetRMS: Float = 0.02,
+         agcAttack: Float = 0.002,
+         agcRelease: Float = 0.02,
+         agcMinGain: Float = 0.5,
+         agcMaxGain: Float = 20.0,
+         onSamples: @escaping SampleHandler) {
         self.deviceID = deviceID
         self.deviceLabel = label
+        self.agcEnabled = agcEnabled
+        self.agcTargetRMS = agcTargetRMS
+        self.agcAttack = agcAttack
+        self.agcRelease = agcRelease
+        self.agcMinGain = agcMinGain
+        self.agcMaxGain = agcMaxGain
         self.onSamples = onSamples
     }
 
@@ -31,6 +59,16 @@ final class MicCapture {
 
     func start() throws {
         stop()
+
+        // Pre-flight: ensure a physical input device exists before touching
+        // AVAudioEngine.  installTap throws an uncatchable ObjC exception if the
+        // underlying device has disappeared and the cached format is stale.
+        if deviceID == nil {
+            guard AudioDeviceMonitor.currentDefaultInputDeviceID() != nil else {
+                throw CaptureError.noInputDevice
+            }
+        }
+
         let eng = AVAudioEngine()
         engine = eng
 
@@ -124,7 +162,18 @@ final class MicCapture {
             samples = resampled
         }
 
-        handler(samples)
+        // Software AGC — normalise level toward agcTargetRMS
+        let rms = sqrt(samples.reduce(Float(0)) { $0 + $1 * $1 } / Float(samples.count))
+        if agcEnabled, rms > 0 {
+            let wantedGain = agcTargetRMS / rms
+            let alpha = wantedGain > softGain ? agcAttack : agcRelease
+            softGain = softGain + alpha * (wantedGain - softGain)
+            softGain = min(max(softGain, agcMinGain), agcMaxGain)
+        }
+        currentGain = agcEnabled ? softGain : 1.0
+        let boosted = agcEnabled ? samples.map { $0 * softGain } : samples
+
+        handler(boosted)
     }
 }
 

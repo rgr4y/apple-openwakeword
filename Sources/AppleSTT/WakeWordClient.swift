@@ -26,6 +26,7 @@ final class WakeWordClient {
     private var stopped = false
     private var activeSound: NSSound?
     private var retryCount = 0
+    private var micPollTimer: DispatchSourceTimer?
     private static let retryDelays: [Double] = [1, 2, 5] // seconds
     // Debug counters
     private var chunksSent: UInt64 = 0
@@ -35,9 +36,29 @@ final class WakeWordClient {
     // Audio format sent to OWW (16kHz, 16-bit signed LE, mono)
     private let fmt = AudioFormat(rate: 16000, width: 2, channels: 1)
 
-    init(host: String, port: UInt16) {
+    // AGC settings (passed in from Config)
+    private let agcEnabled: Bool
+    private let agcTargetRMS: Float
+    private let agcAttack: Float
+    private let agcRelease: Float
+    private let agcMinGain: Float
+    private let agcMaxGain: Float
+
+    init(host: String, port: UInt16,
+         agcEnabled: Bool = true,
+         agcTargetRMS: Float = 0.02,
+         agcAttack: Float = 0.002,
+         agcRelease: Float = 0.02,
+         agcMinGain: Float = 0.5,
+         agcMaxGain: Float = 20.0) {
         self.host = host
         self.port = port
+        self.agcEnabled = agcEnabled
+        self.agcTargetRMS = agcTargetRMS
+        self.agcAttack = agcAttack
+        self.agcRelease = agcRelease
+        self.agcMinGain = agcMinGain
+        self.agcMaxGain = agcMaxGain
     }
 
     // MARK: - Public
@@ -50,6 +71,8 @@ final class WakeWordClient {
     func stop() {
         stopped = true
         cancelReconnect()
+        micPollTimer?.cancel()
+        micPollTimer = nil
         statsTimer?.cancel()
         statsTimer = nil
         connection?.cancel()
@@ -152,13 +175,23 @@ final class WakeWordClient {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let kb = Double(self.bytesSent) / 1024.0
-            log("WakeWordClient: streaming — \(self.chunksSent) chunks, \(String(format: "%.1f", kb)) KB sent", debug: true)
+            let gainStr = self.micCapture.map { String(format: "gain=%.2f", $0.currentGain) } ?? "gain=?"
+            log("WakeWordClient: streaming — \(self.chunksSent) chunks, \(String(format: "%.1f", kb)) KB sent, \(gainStr)", debug: true)
         }
         timer.resume()
         statsTimer = timer
 
         // Start mic capture; convert Float32 → Int16 and send as audio-chunk
-        let capture = MicCapture(deviceID: nil, label: "oww-feed") { [weak self] samples in
+        let capture = MicCapture(
+            deviceID: nil,
+            label: "oww-feed",
+            agcEnabled: agcEnabled,
+            agcTargetRMS: agcTargetRMS,
+            agcAttack: agcAttack,
+            agcRelease: agcRelease,
+            agcMinGain: agcMinGain,
+            agcMaxGain: agcMaxGain
+        ) { [weak self] samples in
             self?.sendSamples(samples)
         }
         micCapture = capture
@@ -166,7 +199,9 @@ final class WakeWordClient {
             try capture.start()
             log("WakeWordClient: mic capture started (oww-feed)", debug: true)
         } catch {
-            log("WakeWordClient: mic start failed: \(error)")
+            log("WakeWordClient: mic start failed: \(error) — polling for device")
+            micCapture = nil
+            pollForMicDevice()
         }
     }
 
@@ -189,6 +224,47 @@ final class WakeWordClient {
         if chunksSent == 1 {
             log("WakeWordClient: → first audio-chunk sent (\(pcm.count) bytes, \(samples.count) samples)", debug: true)
         }
+    }
+
+    /// Poll every 2 s until a default input device reappears, then start mic capture.
+    private func pollForMicDevice() {
+        micPollTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.stopped else {
+                self?.micPollTimer?.cancel()
+                self?.micPollTimer = nil
+                return
+            }
+            guard AudioDeviceMonitor.currentDefaultInputDeviceID() != nil else { return }
+            self.micPollTimer?.cancel()
+            self.micPollTimer = nil
+            log("WakeWordClient: input device reappeared — starting mic capture")
+            let capture = MicCapture(
+                deviceID: nil,
+                label: "oww-feed",
+                agcEnabled: self.agcEnabled,
+                agcTargetRMS: self.agcTargetRMS,
+                agcAttack: self.agcAttack,
+                agcRelease: self.agcRelease,
+                agcMinGain: self.agcMinGain,
+                agcMaxGain: self.agcMaxGain
+            ) { [weak self] samples in
+                self?.sendSamples(samples)
+            }
+            self.micCapture = capture
+            do {
+                try capture.start()
+                log("WakeWordClient: mic capture started (oww-feed)", debug: true)
+            } catch {
+                log("WakeWordClient: mic still unavailable: \(error) — continuing poll")
+                self.micCapture = nil
+                self.pollForMicDevice()
+            }
+        }
+        timer.resume()
+        micPollTimer = timer
     }
 
     // MARK: - Read loop (detection events)

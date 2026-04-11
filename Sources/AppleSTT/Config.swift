@@ -41,6 +41,22 @@ struct ConfigFile: Decodable {
         var model: String?
         /// Detection confidence threshold 0.0–1.0 (default: 0.5)
         var threshold: Double?
+
+        struct AGC: Decodable {
+            /// Enable software AGC on the OWW mic feed (default: true)
+            var enabled: Bool?
+            /// Target RMS level, 0.0–1.0 (default: 0.02 ≈ -34 dBFS)
+            var targetRMS: Double?
+            /// Gain attack rate — how fast gain rises when signal is quiet (default: 0.002)
+            var attack: Double?
+            /// Gain release rate — how fast gain falls when signal is loud (default: 0.02)
+            var release: Double?
+            /// Minimum gain multiplier (default: 0.5)
+            var minGain: Double?
+            /// Maximum gain multiplier (default: 20.0)
+            var maxGain: Double?
+        }
+        var agc: AGC?
     }
 
     struct LLM: Decodable {
@@ -94,6 +110,14 @@ struct Config {
     var listMics: Bool = false
     var owwHost: String? = nil
     var owwPort: UInt16 = 10_400
+
+    // OWW mic software AGC
+    var owwAgcEnabled: Bool = true
+    var owwAgcTargetRMS: Float = 0.02
+    var owwAgcAttack: Float = 0.002
+    var owwAgcRelease: Float = 0.02
+    var owwAgcMinGain: Float = 0.5
+    var owwAgcMaxGain: Float = 20.0
     var debug: Bool = false
     /// When false, the Wyoming TCP server is not started (local-only / HA-direct mode)
     var wyomingEnabled: Bool = true
@@ -199,6 +223,14 @@ struct Config {
         if let o = f.oww {
             if let v = o.host   { owwHost = v }
             if let v = o.port   { owwPort = v }
+            if let a = o.agc {
+                if let v = a.enabled   { owwAgcEnabled = v }
+                if let v = a.targetRMS { owwAgcTargetRMS = Float(v) }
+                if let v = a.attack    { owwAgcAttack = Float(v) }
+                if let v = a.release   { owwAgcRelease = Float(v) }
+                if let v = a.minGain   { owwAgcMinGain = Float(v) }
+                if let v = a.maxGain   { owwAgcMaxGain = Float(v) }
+            }
         }
         if let l = f.llm {
             if let v = l.endpoint     { llmEndpoint = v }
