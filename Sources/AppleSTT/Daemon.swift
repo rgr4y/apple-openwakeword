@@ -24,11 +24,15 @@ final class Daemon {
     private var wakeWordClient: WakeWordClient?
     private var llmClient: LLMClient?
     private var haClient: HAClient?
+    private var haAvailable: Bool = false
+    private var haHealthTimer: DispatchSourceTimer?
     // Triggered STT state (used when --oww-host is set with --local-mic)
     private var sttActive = false
     private var sttWindowTimer: DispatchSourceTimer?
     private var silenceTimer: DispatchSourceTimer?
     private var lastPartialAt: Date = .distantPast
+    private var reWakeCount = 0
+    private var lastInteractionAt: Date = .distantPast
     // True when two mic captures are running; drives "source" field in JSON output.
     private var dualMic: Bool { mic2DeviceID != nil }
 
@@ -133,6 +137,20 @@ final class Daemon {
                 }
                 // Fresh wake — clear any prior conversation context
                 self.llmClient?.clearHistory()
+                // If LLM may be cold, fire a warmup request now so the model is
+                // loading while the user speaks (instead of waiting until after STT).
+                let idleSeconds = Date().timeIntervalSince(self.lastInteractionAt)
+                if self.llmClient != nil
+                    && self.haClient != nil
+                    && self.haAvailable
+                    && idleSeconds > self.config.llmWarmupSeconds,
+                   let llm = self.llmClient {
+                    Task {
+                        log("LLM cold (\(Int(idleSeconds))s idle) — preloading model on wake word")
+                        _ = await llm.process("hi")
+                        llm.clearHistory()
+                    }
+                }
                 playSound("OpenOrEnable2.wav")
                 // JSON line on stdout
                 let obj: [String: Any] = ["type": "wake", "name": name]
@@ -143,6 +161,7 @@ final class Daemon {
                 }
                 // If local-mic is also running, open a timed STT window
                 if self.config.localMic {
+                    self.reWakeCount = 0
                     self.openSTTWindow()
                 }
             }
@@ -170,15 +189,26 @@ final class Daemon {
             let client = LLMClient(
                 endpoint: llmEndpoint,
                 model: config.llmModel,
-                systemPrompt: systemPrompt
+                systemPrompt: systemPrompt,
+                integrations: config.llmIntegrations
             )
             if let ha = haForLLM {
                 client.registerTool(ha, name: "home_assistant")
                 haClient = ha  // also keep reference for LLM-unavailable fallback
+                startHAHealthTimer()
                 log("LLM: registered home_assistant tool → \(config.haHost!)", debug: true)
             }
             client.registerTool(TimeTool(), name: "get_time")
             log("LLM: registered get_time tool", debug: true)
+            if let braveKey = config.llmBraveApiKey {
+                client.registerTool(BraveSearchTool(name: "brave_web_search",
+                    description: "Search the web for current events, weather, news, or any up-to-date information.",
+                    apiKey: braveKey), name: "brave_web_search")
+                client.registerTool(BraveSearchTool(name: "brave_local_search",
+                    description: "Search for local businesses, restaurants, and places near Rob's location in Bakersfield CA.",
+                    apiKey: braveKey), name: "brave_local_search")
+                log("LLM: registered brave_web_search + brave_local_search tools", debug: true)
+            }
             llmClient = client
             log("LLM client → \(llmEndpoint) model=\(config.llmModel)")
             Task { await client.healthCheck() }
@@ -279,7 +309,13 @@ final class Daemon {
         log("endConversation", debug: true);
         playSound("CloseOrDisable2.wav")
         if reWake {
-            log("Re-waking STT window after question response")
+            reWakeCount += 1
+            if reWakeCount > config.maxReWakes {
+                log("Re-wake limit reached (\(config.maxReWakes)) — ending conversation")
+                reWakeCount = 0
+                return
+            }
+            log("Re-waking STT window after question response (\(reWakeCount)/\(config.maxReWakes))")
             playSound("OpenOrEnable2.wav")
             openSTTWindow()
         }
@@ -334,9 +370,12 @@ final class Daemon {
             }
 
             // Send to LLM if configured, otherwise direct to HA if available
+            // (Warmup preload was already fired on wake word detection if LLM was cold.)
             if let llm = self?.llmClient {
                 Task {
                     if let response = await llm.process(text) {
+                        self?.reWakeCount = 0
+                        self?.lastInteractionAt = Date()
                         let robj: [String: Any] = ["type": "llm_response", "text": response, "input": text,
                                                     "llm_model": self?.config.llmModel ?? "",
                                                     "ts": ISO8601DateFormatter().string(from: Date())]
@@ -500,6 +539,30 @@ final class Daemon {
         }
         timer.resume()
         devicePollTimer = timer
+    }
+
+    // MARK: - HA health timer
+
+    private func startHAHealthTimer() {
+        // Run an immediate check, then every 60s, to keep haAvailable current.
+        Task { await checkHAHealth() }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 60, repeating: 60)
+        timer.setEventHandler { [weak self] in
+            Task { await self?.checkHAHealth() }
+        }
+        timer.resume()
+        haHealthTimer = timer
+    }
+
+    private func checkHAHealth() async {
+        guard let ha = haClient else { return }
+        let healthy = await ha.isHealthy()
+        if healthy != haAvailable {
+            haAvailable = healthy
+            log("HA availability changed → \(healthy ? "up" : "down")")
+        }
     }
 
     // MARK: - TTS output

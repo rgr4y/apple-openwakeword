@@ -77,6 +77,22 @@ final class HAClient: LLMTool {
         return hasAction && hasDevice
     }
 
+    // MARK: - Health check
+
+    /// Lightweight ping — GET /api/ returns 200 + {"message":"API running."} when HA is up.
+    func isHealthy() async -> Bool {
+        let url = baseURL.appendingPathComponent("/api/")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 5
+        do {
+            let (_, response) = try await session.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - HA REST API
 
     /// POST /api/conversation/process — sends natural language to HA's conversation agent.

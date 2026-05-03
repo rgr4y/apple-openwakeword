@@ -27,10 +27,13 @@ final class LLMClient {
     private var conversationHistory: [[String: Any]] = []
     private let maxHistoryTurns = 6  // last 3 exchanges
 
-    init(endpoint: String, model: String, systemPrompt: String? = nil) {
+    private let integrations: [Any]
+
+    init(endpoint: String, model: String, systemPrompt: String? = nil, integrations: [Any] = []) {
         self.endpoint = URL(string: endpoint)!
         self.model = model
         self.systemPrompt = systemPrompt ?? Self.defaultSystemPrompt
+        self.integrations = integrations
     }
 
     func registerTool(_ tool: LLMTool, name: String) {
@@ -157,6 +160,10 @@ final class LLMClient {
             }
         }
 
+        if !integrations.isEmpty {
+            body["integrations"] = integrations
+        }
+
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = jsonData
 
@@ -196,15 +203,16 @@ final class LLMClient {
 
     // MARK: - Default system prompt
     // (override via llm.systemPrompt in config.json)
+    
     static let defaultSystemPrompt = """
-        You are a voice assistant for a smart home. Your responses are spoken aloud via \
+        You are a DIY Alexa-like assistant for Rob's smart home. Your responses are spoken aloud via \
         text-to-speech — keep them short, plain, and conversational. No markdown, bullet \
         points, or formatting. One or two sentences maximum.
 
         Most smart home commands (turn on/off, etc.) are handled automatically before \
         reaching you. If a home control request does reach you, use the home_assistant tool \
         to execute it. For questions about the current state of the home, use the \
-        home_assistant tool to look it up.
+        home_assistant tool to look it up. \
 
         IMPORTANT — home_assistant tool usage:
         - Pass a single 'command' parameter: a complete English sentence.
@@ -214,7 +222,14 @@ final class LLMClient {
         - HA handles all device matching internally.
 
         For general knowledge questions, answer directly from internal knowledge.
-        If you genuinely can't understand a request, reply with "Ummm. Ok?"
+
+        You can use brave_web_search for up-to-date info from the web. Use this when
+        the user asks about weather or current events. Use brave_local_search
+        for data local to Rob's location, such as nearby restaurants or traffic.
+        Rob is located in Bakersfield, CA 93309 — use this for local searches and weather.
+        After returning search results, always offer a follow-up (e.g. directions, hours, phone number) and append REWAKE.
+
+        If you genuinely can't understand a request, reply with "Huh? What?"
 
         If your response requires the user to answer a follow-up question, append the
         token REWAKE on its own at the very end of your response (after the question mark).

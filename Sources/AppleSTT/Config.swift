@@ -20,6 +20,10 @@ struct ConfigFile: Decodable {
         var silenceWindowSeconds: Double?
         /// Minimum word count for a transcript to be emitted (default: 1)
         var minTranscriptWords: Int?
+        /// Max consecutive re-wakes when the system can't understand you (default: 2)
+        var maxReWakes: Int?
+        /// Seconds of inactivity before routing first message to HA while warming up local LLM (default: 900)
+        var llmWarmupSeconds: Double?
         var mic1: String?
         var mic2: String?
         /// Set to false to disable Wyoming TCP listener (local-only / HA-direct mode)
@@ -68,6 +72,10 @@ struct ConfigFile: Decodable {
         var systemPrompt: String?
         /// Set to false to bypass the LLM and send all transcripts directly to HA (default: true)
         var enabled: Bool?
+        /// LM Studio MCP integration IDs to pass in each request (e.g. ["mcp/brave-search"])
+        var integrations: [String]?
+        /// Brave Search API key — enables brave_web_search and brave_local_search tools
+        var braveApiKey: String?
     }
 
     struct HA: Decodable {
@@ -127,6 +135,8 @@ struct Config {
     var llmModel: String = "apple-foundationmodel"
     var llmSystemPrompt: String? = nil
     var llmEnabled: Bool = true
+    var llmIntegrations: [String] = []
+    var llmBraveApiKey: String? = nil
 
     // Home Assistant
     var haHost: String? = nil
@@ -137,6 +147,8 @@ struct Config {
     var sttWindowSeconds: Double = 8.0
     var silenceWindowSeconds: Double? = nil
     var minTranscriptWords: Int = 1
+    var maxReWakes: Int = 2
+    var llmWarmupSeconds: Double = 900
     /// Words-per-minute rate for /usr/bin/say (default: 242 = 220 * 1.1)
     var sayRate: Int = 242
 
@@ -213,6 +225,8 @@ struct Config {
             if let v = s.windowSeconds       { sttWindowSeconds = v }
             if let v = s.silenceWindowSeconds { silenceWindowSeconds = v }
             if let v = s.minTranscriptWords  { minTranscriptWords = v }
+            if let v = s.maxReWakes          { maxReWakes = v }
+            if let v = s.llmWarmupSeconds    { llmWarmupSeconds = v }
             if let v = s.mic1               { mic1DeviceName = v }
             if let v = s.mic2               { mic2DeviceName = v }
             if let v = s.wyomingEnabled      { wyomingEnabled = v }
@@ -237,6 +251,8 @@ struct Config {
             if let v = l.model        { llmModel = v }
             if let v = l.systemPrompt { llmSystemPrompt = v }
             if let v = l.enabled      { llmEnabled = v }
+            if let v = l.integrations { llmIntegrations = v }
+            if let v = l.braveApiKey  { llmBraveApiKey = v }
         }
         if let h = f.ha {
             if let v = h.host              { haHost = v }
